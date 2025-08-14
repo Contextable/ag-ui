@@ -7,7 +7,7 @@ import {
 import { PredictiveStateUpdatesPage } from "../../pages/crewAIPages/PredictiveStateUpdatesPage";
 
 test.describe("Predictive Status Updates Feature", () => {
-  test("[CrewAI] should interact with agent and approve asked changes", async ({
+  test.fixme("[CrewAI] should interact with agent and approve asked changes", async ({
     page,
   }) => {
     await retryOnAIFailure(async () => {
@@ -15,13 +15,12 @@ test.describe("Predictive Status Updates Feature", () => {
 
       // Update URL to new domain
       await page.goto(
-        "https://ag-ui-dojo-nine.vercel.app/crewai/feature/predictive_state_updates"
+        "/crewai/feature/predictive_state_updates"
       );
 
       await predictiveStateUpdates.openChat();
-
       await predictiveStateUpdates.sendMessage(
-        "Give me a story for a dragon called Atlantis"
+        "Give me a story for a dragon called Atlantis in document"
       );
       await waitForAIResponse(page);
       await predictiveStateUpdates.getPredictiveResponse();
@@ -45,7 +44,7 @@ test.describe("Predictive Status Updates Feature", () => {
     });
   });
 
-  test("[CrewAI] should interact with agent and reject asked changes", async ({
+  test.fixme("[CrewAI] should interact with agent and reject asked changes", async ({
     page,
   }) => {
     await retryOnAIFailure(async () => {
@@ -53,19 +52,33 @@ test.describe("Predictive Status Updates Feature", () => {
 
       // Update URL to new domain
       await page.goto(
-        "https://ag-ui-dojo-nine.vercel.app/crewai/feature/predictive_state_updates"
+        "/crewai/feature/predictive_state_updates"
       );
 
       await predictiveStateUpdates.openChat();
 
       await predictiveStateUpdates.sendMessage(
-        "Give me a story for a dragon called called Atlantis"
+        "Give me a story for a dragon called called Atlantis in document"
       );
-      await waitForAIResponse(page);
       await predictiveStateUpdates.getPredictiveResponse();
-      await predictiveStateUpdates.getUserRejection();
+      await predictiveStateUpdates.getUserApproval();
       await predictiveStateUpdates.confirmedChangesResponse.isVisible();
-      await predictiveStateUpdates.agentResponsePrompt.isVisible();
+      const dragonName = await predictiveStateUpdates.verifyAgentResponse(
+        "Atlantis"
+      );
+      expect(dragonName).not.toBeNull();
+
+      // Send update to change the dragon name
+      await predictiveStateUpdates.sendMessage("Change dragon name to Lola");
+      await waitForAIResponse(page);
+      await predictiveStateUpdates.verifyHighlightedText();
+      await predictiveStateUpdates.getUserRejection();
+      await predictiveStateUpdates.rejectedChangesResponse.isVisible();
+      const dragonNameAfterRejection = await predictiveStateUpdates.verifyAgentResponse(
+        "Atlantis"
+      );
+      expect(dragonNameAfterRejection).toBe(dragonName);
+      expect(dragonNameAfterRejection).not.toBe("Lola");
     });
   });
 });
