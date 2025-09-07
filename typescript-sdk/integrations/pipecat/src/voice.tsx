@@ -45,6 +45,7 @@ export const usePipecatVoice = (props: PipecatVoiceProps) => {
   });
 
   const clientRef = useRef<PipecatClient | null>(null);
+  const botAudioRef = useRef<HTMLAudioElement | null>(null);
 
   const connect = useCallback(async () => {
     if (clientRef.current || state.isConnecting) return;
@@ -52,34 +53,61 @@ export const usePipecatVoice = (props: PipecatVoiceProps) => {
     try {
       setState(prev => ({ ...prev, isConnecting: true, error: undefined }));
 
+      // Create audio element for bot playback if not exists
+      if (!botAudioRef.current) {
+        const audio = document.createElement('audio');
+        audio.autoplay = true;
+        document.body.appendChild(audio);
+        botAudioRef.current = audio;
+      }
+
       const transport = new WebSocketTransport();
       
       const options: PipecatClientOptions = {
         transport,
         enableMic: config.enableMic ?? true,
-        // Don't set baseUrl or endpoints.connect to bypass handshake for direct WebSocket connection
+        enableCam: false,
+        callbacks: {
+          onConnected: () => {
+            console.log('[PipecatVoice] Connected');
+            setState(prev => ({ ...prev, isConnected: true, isConnecting: false }));
+            onConnected?.();
+          },
+          onDisconnected: () => {
+            console.log('[PipecatVoice] Disconnected');
+            setState(prev => ({ ...prev, isConnected: false, isConnecting: false }));
+            onDisconnected?.();
+          },
+          onBotReady: (data: any) => {
+            console.log('[PipecatVoice] Bot ready:', data);
+            setupMediaTracks();
+          },
+          onUserTranscript: (data: any) => {
+            if (data.final) {
+              console.log('[PipecatVoice] User:', data.text);
+            }
+          },
+          onBotTranscript: (data: any) => {
+            console.log('[PipecatVoice] Bot:', data.text);
+          },
+          onMessageError: (error: any) => {
+            console.error('[PipecatVoice] Message error:', error);
+            const errorMsg = error?.message || 'Message error';
+            setState(prev => ({ ...prev, error: errorMsg }));
+            onError?.(new Error(errorMsg));
+          },
+          onError: (error: any) => {
+            console.error('[PipecatVoice] Error:', error);
+            const errorMsg = error?.message || 'Unknown error';
+            setState(prev => ({ ...prev, error: errorMsg, isConnecting: false }));
+            onError?.(new Error(errorMsg));
+          },
+        },
       };
 
       const client = new PipecatClient(options);
 
-      // Set up event listeners
-      client.on(RTVIEvent.Connected, () => {
-        setState(prev => ({ ...prev, isConnected: true, isConnecting: false }));
-        onConnected?.();
-      });
-
-      client.on(RTVIEvent.Disconnected, () => {
-        setState(prev => ({ ...prev, isConnected: false, isConnecting: false }));
-        onDisconnected?.();
-      });
-
-      client.on(RTVIEvent.Error, (message: any) => {
-        const errorMsg = message?.data?.message || message?.message || 'Unknown error';
-        const error = new Error(errorMsg);
-        setState(prev => ({ ...prev, error: errorMsg, isConnecting: false }));
-        onError?.(error);
-      });
-
+      // Set up additional event listeners for speaking states
       client.on(RTVIEvent.UserStartedSpeaking, () => {
         setState(prev => ({ ...prev, userSpeaking: true }));
         onUserStartedSpeaking?.();
@@ -100,14 +128,46 @@ export const usePipecatVoice = (props: PipecatVoiceProps) => {
         onBotStoppedSpeaking?.();
       });
 
+      // Set up track listeners for audio
+      client.on(RTVIEvent.TrackStarted, (track: MediaStreamTrack, participant: any) => {
+        console.log('[PipecatVoice] Track started:', track.kind, 'from', participant?.name);
+        if (!participant?.local && track.kind === 'audio') {
+          setupAudioTrack(track);
+        }
+      });
+
+      client.on(RTVIEvent.TrackStopped, (track: MediaStreamTrack, participant: any) => {
+        console.log('[PipecatVoice] Track stopped:', track.kind, 'from', participant?.name);
+      });
+
       clientRef.current = client;
+
+      // Setup helper functions
+      const setupMediaTracks = () => {
+        if (!client) return;
+        const tracks = client.tracks();
+        if (tracks.bot?.audio) {
+          setupAudioTrack(tracks.bot.audio);
+        }
+      };
+
+      const setupAudioTrack = (track: MediaStreamTrack) => {
+        console.log('[PipecatVoice] Setting up audio track');
+        if (!botAudioRef.current) return;
+        
+        // Check if we already have this track
+        if (botAudioRef.current.srcObject && 'getAudioTracks' in botAudioRef.current.srcObject) {
+          const oldTrack = (botAudioRef.current.srcObject as MediaStream).getAudioTracks()[0];
+          if (oldTrack?.id === track.id) return;
+        }
+        
+        botAudioRef.current.srcObject = new MediaStream([track]);
+      };
       
-      // Connect directly to WebSocket (bypassing HTTP handshake for local development)
-      console.log('[PipecatVoice] Connecting directly to WebSocket:', config.websocketUrl);
-      await client.connect({
-        wsUrl: config.websocketUrl,
-        endpoint: "http://localhost:8765",
-        timeout: config.timeout,
+      // Initialize devices and connect
+      await client.initDevices();
+      await client.connect({ 
+        wsUrl: config.websocketUrl
       });
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
@@ -123,8 +183,20 @@ export const usePipecatVoice = (props: PipecatVoiceProps) => {
     try {
       await clientRef.current.disconnect();
       clientRef.current = null;
+      
+      // Clean up audio element
+      if (botAudioRef.current) {
+        if (botAudioRef.current.srcObject && 'getAudioTracks' in botAudioRef.current.srcObject) {
+          (botAudioRef.current.srcObject as MediaStream).getAudioTracks().forEach(track => track.stop());
+          botAudioRef.current.srcObject = null;
+        }
+        if (botAudioRef.current.parentNode) {
+          botAudioRef.current.parentNode.removeChild(botAudioRef.current);
+        }
+        botAudioRef.current = null;
+      }
     } catch (error) {
-      console.error("Error disconnecting RTVI client:", error);
+      console.error("Error disconnecting Pipecat client:", error);
     }
   }, []);
 
@@ -147,6 +219,15 @@ export const usePipecatVoice = (props: PipecatVoiceProps) => {
         const disconnectPromise = clientRef.current.disconnect();
         if (disconnectPromise && typeof disconnectPromise.catch === 'function') {
           disconnectPromise.catch(console.error);
+        }
+      }
+      // Clean up audio element on unmount
+      if (botAudioRef.current) {
+        if (botAudioRef.current.srcObject && 'getAudioTracks' in botAudioRef.current.srcObject) {
+          (botAudioRef.current.srcObject as MediaStream).getAudioTracks().forEach(track => track.stop());
+        }
+        if (botAudioRef.current.parentNode) {
+          botAudioRef.current.parentNode.removeChild(botAudioRef.current);
         }
       }
     };
