@@ -449,9 +449,9 @@ class PipecatAGUIBot:
                     allow_interruptions=True,
                     enable_metrics=True,
                     enable_usage_metrics=True,
-                    idle_timeout_secs=None,  # Disable idle timeout completely
                     cancel_on_idle_timeout=False  # Prevents automatic cancellation
                 ),
+                idle_timeout_secs=None,  # Disable idle timeout completely
                 observers=[
                     RTVIObserver(services["rtvi"]),  # RTVI observer
                     self.agui_observer  # AG-UI observer for SSE events
