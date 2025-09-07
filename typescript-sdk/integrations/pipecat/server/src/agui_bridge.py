@@ -215,16 +215,20 @@ class AGUIObserver(BaseObserver):
                 logger.info(f"[LLM_OUTPUT] LLM finished generating response")
                 await self._end_current_message()
 
-                # The ONLY time this frame should finish the run is when it's the
-                # final response AFTER a SERVER-SIDE tool has successfully executed.
-                if self.pending_tool_calls == 0 and self._has_had_tool_calls:
-                    logger.info(f"[TOOL_FLOW] Final LLM response after tool calls completed - finishing run")
+                # Check what type of response this was and handle accordingly
+                if self.pending_tool_calls == 0 and not self._has_had_tool_calls:
+                    # Simple text response with no tool calls - do soft finish
+                    logger.info(f"[LLM_OUTPUT] Simple text response completed - finishing run")
+                    await self._finish_run({"status": "completed", "type": "simple_response"})
+                elif self.pending_tool_calls == 0 and self._has_had_tool_calls:
+                    # Final response AFTER SERVER-SIDE tools have executed
+                    logger.info(f"[TOOL_FLOW] Final LLM response after server tool calls completed - finishing run")
                     await self._finish_run({"status": "completed", "type": "final_llm_response"})
                 else:
-                    # For simple text responses, we now let the EndFrame handler finish the run.
-                    # For client-side tools, this handler does nothing, as the "soft finish"
-                    # has already been sent and we are waiting for a new request with tool results.
-                    logger.info(f"[LLM_OUTPUT] LLM response completed. Deferring finish decision to appropriate handler.")
+                    # Tool calls are pending (either client or server)
+                    # For client-side tools, the soft finish has already been sent
+                    # For server-side tools, we wait for them to complete
+                    logger.info(f"[LLM_OUTPUT] LLM response completed with {self.pending_tool_calls} tool calls pending")
 
             elif isinstance(frame, TextFrame):
                 # Skip regular TextFrame - we only want LLM-generated text
