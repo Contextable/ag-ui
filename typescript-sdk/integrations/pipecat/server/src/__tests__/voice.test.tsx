@@ -1,8 +1,8 @@
 import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { act } from "react";
-import { PipecatVoice, usePipecatVoice, PipecatVoiceProps, PipecatVoiceState } from "../voice";
-import { PipecatVoiceConfig } from "../types";
+import { PipecatVoice, usePipecatVoice, PipecatVoiceProps, PipecatVoiceState } from "../../../src/voice";
+import { PipecatVoiceConfig } from "../../../src/types";
 import { PipecatClient, RTVIEvent } from "@pipecat-ai/client-js";
 
 // Mock the PipecatClient

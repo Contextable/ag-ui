@@ -114,5 +114,10 @@ export const menuIntegrations: MenuIntegrationConfig[] = [
     name: "Vercel AI SDK",
     features: ["agentic_chat"],
   },
+  {
+    id: "pipecat",
+    name: "Pipecat",
+    features: ["agentic_chat"],
+  },
 ];
 

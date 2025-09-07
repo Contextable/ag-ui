@@ -204,7 +204,10 @@ const agentFilesMapper: Record<string, (agentKeys: string[]) => Record<string, s
       ...acc,
       [agentId]: [path.join(__dirname, integrationsFolderPath, `/crewai/python/ag_ui_crewai/examples/${agentId}.py`)]
     }), {})
-  }
+  },
+  'pipecat': () => ({
+    agentic_chat: [path.join(__dirname, integrationsFolderPath, `/pipecat/src/index.ts`)]
+  })
 }
 
 async function runGenerateContent() {

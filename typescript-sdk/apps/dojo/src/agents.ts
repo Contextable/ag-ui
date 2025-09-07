@@ -15,6 +15,7 @@ import { CrewAIAgent } from "@ag-ui/crewai";
 import getEnvVars from "./env";
 import { mastra } from "./mastra";
 import { PydanticAIAgent } from "@ag-ui/pydantic-ai";
+import { PipecatAgent } from "@ag-ui/pipecat";
 
 const envVars = getEnvVars();
 export const agentsIntegrations: AgentIntegrationConfig[] = [
@@ -267,6 +268,16 @@ export const agentsIntegrations: AgentIntegrationConfig[] = [
         }),
         predictive_state_updates: new CrewAIAgent({
           url: `${envVars.crewAiUrl}/predictive_state_updates`,
+        }),
+      };
+    },
+  },
+  {
+    id: "pipecat",
+    agents: async () => {
+      return {
+        agentic_chat: new PipecatAgent({
+          agUIEndpoint: `${envVars.pipecatUrl}/sse`,
         }),
       };
     },
