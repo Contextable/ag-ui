@@ -52,7 +52,8 @@ const Chat = ({ integrationId }: { integrationId: string }) => {
 
   // Pipecat voice configuration  
   const pipecatConfig: PipecatVoiceConfig = {
-    websocketUrl: "http://localhost:8765",
+    websocketUrl: "ws://localhost:8765/ws",
+    //websocketUrl: "wss://respectful-inspiration-production-fc90.up.railway.app/ws",
     timeout: 30000,
   };
 

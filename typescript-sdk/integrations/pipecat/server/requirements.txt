@@ -1,6 +1,6 @@
 # Core dependencies
 pipecat-ai[websocket,openai,cartesia,deepgram,silero]==0.0.83
-ag-ui-protocol
+ag-ui-protocol==0.1.8
 fastapi>=0.100.0
 uvicorn[standard]>=0.23.0
 python-dotenv>=1.0.0

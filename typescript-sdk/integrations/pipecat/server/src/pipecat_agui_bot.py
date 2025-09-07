@@ -57,6 +57,7 @@ from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.transports.websocket.server import WebsocketServerTransport, WebsocketServerParams
 from pipecat.audio.vad.silero import SileroVADAnalyzer
+from pipecat.serializers.protobuf import ProtobufFrameSerializer
 
 # Import our AG-UI bridge
 from agui_bridge import AGUIObserver
@@ -98,6 +99,11 @@ class PipecatAGUIBot:
             allow_methods=["*"],
             allow_headers=["*"],
         )
+
+        @self.app.get("/health")
+        async def health_check():
+            """Health check endpoint for Railway"""
+            return {"status": "healthy", "mode": os.getenv("WEBSOCKET_SERVER", "fast_api")}
         
         # Add RTVI root endpoint for voice connections
         @self.app.post("/")
@@ -133,17 +139,23 @@ class PipecatAGUIBot:
         )
         
         # WebSocket server transport
+        ws_host = self.config.get("websocket_host", "0.0.0.0") 
+        ws_port = self.config.get("websocket_port", 8765)
+        logger.info(f"Creating WebSocket transport with host={ws_host}, port={ws_port}")
         transport = WebsocketServerTransport(
             params=WebsocketServerParams(
-                host=self.config.get("websocket_host", "0.0.0.0"),
-                port=self.config.get("websocket_port", 8765),
                 audio_in_enabled=True,
                 audio_out_enabled=True,
                 add_wav_header=False,
                 vad_analyzer=SileroVADAnalyzer(),
+                serializer=ProtobufFrameSerializer(),
                 path="/ws"
-            )
+            ),
+            host=ws_host,
+            port=ws_port
         )
+        # Debug the transport configuration
+        logger.info(f"Transport params: {transport._params}")
         
         # RTVI configuration for client communication
         rtvi_config = RTVIConfig(config=[])
@@ -426,8 +438,12 @@ class PipecatAGUIBot:
             if self.agui_observer.is_streaming:
                 await self.agui_observer._end_stream({"reason": "websocket_disconnected"})
             
-            # End the pipeline
-            await task.queue_frame(EndFrame())
+            # Don't end the pipeline - keep the server running for new connections
+            # Just reset the conversation context for the next connection
+            context = services.get("context")
+            if context:
+                context.set_messages([self._get_system_prompt()])
+                logger.info("Conversation context reset for next connection")
     
     async def run(self):
         """Main bot execution"""
@@ -554,7 +570,7 @@ class PipecatAGUIBot:
         config = uvicorn.Config(
             app=self.app,
             host="0.0.0.0",
-            port=self.config.get("http_port", 8000),
+            port=int(os.environ.get("PORT", 8000)),
             log_level="info"
         )
         server = uvicorn.Server(config)
@@ -589,7 +605,7 @@ def load_config_from_env() -> Dict[str, Any]:
     config["agui_endpoint"] = os.getenv("AG_UI_ENDPOINT", "http://localhost:3000/api/ag-ui/stream")
     config["websocket_host"] = os.getenv("WEBSOCKET_HOST", "0.0.0.0")
     config["websocket_port"] = int(os.getenv("WEBSOCKET_PORT", "8765"))
-    config["http_port"] = int(os.getenv("HTTP_PORT", "8000"))
+    config["http_port"] = int(os.getenv("PORT", "8000"))
     config["debug"] = os.getenv("DEBUG", "false").lower() == "true"
     
     # Parse auth headers if provided
