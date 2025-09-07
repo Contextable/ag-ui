@@ -526,11 +526,12 @@ class PipecatAGUIBot:
             # 1. Perform a full reset of the observer's ID tracking.
             await self.agui_observer.full_reset(accept_header)
             
-            # 2. Reset the LLM's conversation history by sending a new context.
+            # 2. Reset the LLM's conversation history using the context aggregator.
             logger.info("[CONTEXT] Client reset detected. Clearing LLM context.")
-            await self.pipeline_task.queue_frame(
-                LLMMessagesFrame(messages=[self._get_system_prompt()])
-            )
+            context = self.services.get("context")
+            if context:
+                context.set_messages([self._get_system_prompt()])
+                logger.info("[CONTEXT] Reset context messages to system prompt only")
         else:
             # Normal continuation of the conversation.
             await self.agui_observer.reset_for_new_run(accept_header)
