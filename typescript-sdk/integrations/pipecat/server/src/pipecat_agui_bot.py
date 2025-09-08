@@ -44,7 +44,7 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-from pipecat.frames.frames import LLMMessagesFrame, EndFrame, LLMSetToolsFrame
+from pipecat.frames.frames import LLMMessagesFrame, EndFrame, LLMSetToolsFrame, StartInterruptionFrame
 from pipecat.adapters.schemas.tools_schema import FunctionSchema, ToolsSchema
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
@@ -58,6 +58,10 @@ from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.transports.websocket.server import WebsocketServerTransport, WebsocketServerParams
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.serializers.protobuf import ProtobufFrameSerializer
+from pipecat.frames.frames import TTSSpeakFrame, TTSAudioRawFrame, TTSTextFrame
+from pipecat.processors.filters.function_filter import FunctionFilter
+from pipecat.processors.frame_processor import FrameProcessor, Frame
+from pipecat.utils.text.markdown_text_filter import MarkdownTextFilter  
 
 # Import our AG-UI bridge
 from agui_bridge import AGUIObserver
@@ -65,7 +69,6 @@ from agui_bridge import AGUIObserver
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
 
 class PipecatAGUIBot:
     """
@@ -87,6 +90,8 @@ class PipecatAGUIBot:
         self.agui_observer: AGUIObserver = None
         self.pipeline_task: PipelineTask = None  # Will be set when pipeline runs
         self.services: Dict[str, Any] = {}  # Will be set when services are created
+        self.connection_filter: FunctionFilter = None  # Will be set when services are created
+        self.tts_on: bool = False #TTS is off by default
         
         # Create FastAPI app for HTTP/SSE endpoint
         self.app = FastAPI(title="Pipecat AG-UI Bot")
@@ -174,10 +179,14 @@ class PipecatAGUIBot:
             model="gpt-4o",
         )
         
+        # Create the markdown filter  
+        markdown_filter = MarkdownTextFilter() 
+
         # Text-to-speech service
         tts = CartesiaTTSService(
             api_key=self.config["cartesia_api_key"],
-            voice_id="79a125e8-cd45-4c13-8a67-188112f4dd22",  # British Lady
+            voice_id="79a125e8-cd45-4c13-8a67-188112f4dd22", # British Lady
+            text_filters=[markdown_filter] 
         )
         
         # Create context with system prompt - let context aggregator handle conversation history
@@ -192,6 +201,14 @@ class PipecatAGUIBot:
         context = OpenAILLMContext(messages=[system_message])
         context_aggregator = llm.create_context_aggregator(context)
         
+        # Create WebSocket connection filter to prevent TTS when disconnected
+        async def not_tts_frame(frame: Frame) -> bool:
+            tts_types = (TTSSpeakFrame, TTSAudioRawFrame, TTSTextFrame)
+            return self.tts_on or not isinstance(frame, tts_types)
+        
+        tts_filter = FunctionFilter(filter=not_tts_frame)
+        self.connection_filter = tts_filter
+        
         return {
             "transport": transport,
             "rtvi": rtvi,
@@ -199,7 +216,8 @@ class PipecatAGUIBot:
             "llm": llm,
             "tts": tts,
             "context": context,
-            "context_aggregator": context_aggregator
+            "context_aggregator": context_aggregator,
+            "connection_filter": self.connection_filter
         }
     
     async def create_pipeline(self, services: Dict[str, Any]) -> Pipeline:
@@ -212,6 +230,7 @@ class PipecatAGUIBot:
             services["stt"],                        # Speech-to-text
             services["context_aggregator"].user(),  # User message context
             services["llm"],                        # Language model
+            services["connection_filter"],          # Filter TTS when no WebSocket connection
             services["tts"],                        # Text-to-speech
             services["transport"].output(),         # WebSocket audio output
             services["context_aggregator"].assistant(),  # Assistant message context
@@ -348,6 +367,25 @@ class PipecatAGUIBot:
                 if message.role == "user":
                     if not newest_user_message:
                         newest_user_message = message
+                elif message.role == "developer":
+                    # Developer messages with content become system instructions and trigger LLM
+                    # Empty developer messages are just run triggers
+                    if message.content and message.content.strip():
+                        # Check if we've already processed this developer message ID to avoid duplicates
+                        if message.id not in self.agui_observer.processed_message_ids:
+                            # Add system instruction and trigger LLM run
+                            from pipecat.frames.frames import LLMMessagesAppendFrame
+                            system_message_frame = LLMMessagesAppendFrame(  
+                                 messages=[{"role": "system", "content": message.content}],  
+                                 run_llm=True  
+                            )  
+                            frames_to_queue.extend([system_message_frame])
+                            self.agui_observer.processed_message_ids.add(message.id)
+                            logger.info(f"[TRIGGER] Developer message converted to system instruction with LLM trigger: '{message.content}'")
+                        else:
+                            logger.info(f"[TRIGGER] Developer message already processed, skipping: '{message.content}'")
+                    else:
+                        logger.info(f"[TRIGGER] Empty developer message received as run trigger only")
                 
                 elif message.role == "tool":
                     new_tool_results.append(message)
@@ -400,7 +438,7 @@ class PipecatAGUIBot:
         
         @rtvi.event_handler("on_client_ready")
         async def on_client_ready(rtvi):
-            """When RTVI client is ready, start the conversation"""
+            """When RTVI client is ready, prepare for conversation"""
             logger.info("RTVI client ready")
             
             # Signal bot is ready to receive messages
@@ -409,12 +447,8 @@ class PipecatAGUIBot:
             # Start AG-UI streaming
             await self.agui_observer._start_stream()
             
-            # Context aggregator handles conversation initialization - no manual system message needed
-            logger.info(f"[CONTEXT] Context aggregator will handle conversation initialization")
-            
-            await task.queue_frames([
-                services["context_aggregator"].user().get_context_frame()
-            ])
+            # Don't trigger LLM generation here - let the client-side onConnected callback handle greeting
+            logger.info(f"[CONTEXT] RTVI ready, waiting for client-side greeting trigger")
         
         # Note: RTVI processor doesn't have on_client_disconnect event
         # Client disconnect is handled by WebsocketServerTransport's on_client_disconnected event
@@ -428,11 +462,28 @@ class PipecatAGUIBot:
         async def on_client_connected(transport, client):
             """When WebSocket client connects"""
             logger.info(f"WebSocket client connected: {client}")
+            
+            # Send StartInterruptionFrame to clear any ongoing processing
+            logger.info("Sending StartInterruptionFrame to pipeline for new WebSocket connection")
+            await task.queue_frame(StartInterruptionFrame())
+            
+            # Reset context aggregators for fresh conversation
+            context_aggregator = services.get("context_aggregator")
+            if context_aggregator:
+                logger.info("Resetting context aggregators for new WebSocket connection")
+                await context_aggregator.user().reset()
+                await context_aggregator.assistant().reset()
+            
+            # Update connection filter to allow TTS
+            self.tts_on = True
         
         @transport.event_handler("on_client_disconnected")
         async def on_client_disconnected(transport, client):
             """When WebSocket client disconnects"""
             logger.info(f"WebSocket client disconnected: {client}")
+            
+            # Update connection filter to block TTS
+            self.tts_on = False
             
             # End AG-UI streaming if not already ended
             if self.agui_observer.is_streaming:

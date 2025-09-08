@@ -4,6 +4,7 @@ import React, { useState, useEffect, useCallback, useRef } from "react";
 import { PipecatClient, PipecatClientOptions, RTVIEvent } from "@pipecat-ai/client-js";
 import { WebSocketTransport } from "@pipecat-ai/websocket-transport";
 import { PipecatVoiceConfig } from "./types";
+import { useCoAgent, useCopilotContext } from "@copilotkit/react-core";
 
 export interface PipecatVoiceControls {
   state: PipecatVoiceState;
@@ -46,6 +47,7 @@ export const usePipecatVoice = (props: PipecatVoiceProps) => {
 
   const clientRef = useRef<PipecatClient | null>(null);
   const botAudioRef = useRef<HTMLAudioElement | null>(null);
+  
 
   const connect = useCallback(async () => {
     if (clientRef.current || state.isConnecting) return;
@@ -57,6 +59,7 @@ export const usePipecatVoice = (props: PipecatVoiceProps) => {
       if (!botAudioRef.current) {
         const audio = document.createElement('audio');
         audio.autoplay = true;
+        audio.volume = 0.7; // Lower volume to reduce microphone feedback
         document.body.appendChild(audio);
         botAudioRef.current = audio;
       }
@@ -107,23 +110,27 @@ export const usePipecatVoice = (props: PipecatVoiceProps) => {
 
       const client = new PipecatClient(options);
 
-      // Set up additional event listeners for speaking states
+      // Set up additional event listeners for speaking states with debugging
       client.on(RTVIEvent.UserStartedSpeaking, () => {
+        console.log('[PipecatVoice] 🎤 UserStartedSpeaking event fired!');
         setState(prev => ({ ...prev, userSpeaking: true }));
         onUserStartedSpeaking?.();
       });
 
       client.on(RTVIEvent.UserStoppedSpeaking, () => {
+        console.log('[PipecatVoice] 🎤 UserStoppedSpeaking event fired!');
         setState(prev => ({ ...prev, userSpeaking: false }));
         onUserStoppedSpeaking?.();
       });
 
       client.on(RTVIEvent.BotStartedSpeaking, () => {
+        console.log('[PipecatVoice] 🔊 BotStartedSpeaking event fired!');
         setState(prev => ({ ...prev, botSpeaking: true }));
         onBotStartedSpeaking?.();
       });
 
       client.on(RTVIEvent.BotStoppedSpeaking, () => {
+        console.log('[PipecatVoice] 🔊 BotStoppedSpeaking event fired!');
         setState(prev => ({ ...prev, botSpeaking: false }));
         onBotStoppedSpeaking?.();
       });
@@ -241,7 +248,14 @@ export const usePipecatVoice = (props: PipecatVoiceProps) => {
   };
 };
 
-export const PipecatVoice: React.FC<PipecatVoiceProps> = ({ 
+// Simplified CopilotKit wrapper - the parent component handles triggering via proper CopilotKit APIs
+const PipecatVoiceWithCopilot: React.FC<PipecatVoiceProps> = (props) => {
+  // Just pass through the props - the parent component will handle AG-UI bridge triggering
+  return <PipecatVoiceBase {...props} />;
+};
+
+// Base component without CopilotKit integration
+const PipecatVoiceBase: React.FC<PipecatVoiceProps> = ({ 
   children, 
   ...props 
 }) => {
@@ -285,5 +299,43 @@ export const PipecatVoice: React.FC<PipecatVoiceProps> = ({
         )}
       </div>
     </div>
+  );
+};
+
+// Error boundary to catch CopilotKit context errors
+class CopilotKitErrorBoundary extends React.Component<
+  { children: React.ReactNode; fallback: React.ReactNode },
+  { hasError: boolean }
+> {
+  constructor(props: { children: React.ReactNode; fallback: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError(error: any) {
+    // Update state so the next render will show the fallback UI
+    console.log('[PipecatVoice] CopilotKit Error Boundary caught error:', error?.message || error);
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: any, errorInfo: any) {
+    console.log('[PipecatVoice] CopilotKit Error Boundary details:', error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return this.props.fallback;
+    }
+
+    return this.props.children;
+  }
+}
+
+// Smart wrapper that always tries CopilotKit first, falls back gracefully
+export const PipecatVoice: React.FC<PipecatVoiceProps> = (props) => {
+  return (
+    <CopilotKitErrorBoundary fallback={<PipecatVoiceBase {...props} />}>
+      <PipecatVoiceWithCopilot {...props} />
+    </CopilotKitErrorBoundary>
   );
 };
