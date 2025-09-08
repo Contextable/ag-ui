@@ -158,7 +158,8 @@ class AGUIObserver(BaseObserver):
     
     async def on_task_started(self, task: PipelineTask):
         """Called when pipeline task starts"""
-        await self._start_stream()
+        # Do NOT auto-start AG-UI stream here - it should only start when an HTTP/SSE request comes in
+        self._log("Pipeline task started - AG-UI stream will start on first HTTP request")
     
     async def on_task_ended(self, task: PipelineTask):
         """Called when pipeline task ends"""
@@ -205,11 +206,18 @@ class AGUIObserver(BaseObserver):
             # Handle assistant frames (DOWNSTREAM)
             elif isinstance(frame, LLMFullResponseStartFrame):
                 logger.info(f"[LLM_OUTPUT] LLM started generating response")
+                # Start text message and queue events even if no SSE stream is active yet
+                # This handles voice-triggered runs where LLM starts before HTTP request
                 await self._start_text_message("assistant")
             
             elif isinstance(frame, LLMTextFrame):
-                logger.info(f"[LLM_OUTPUT] LLM generated text chunk (LLMTextFrame): '{frame.text}'")
-                await self._add_text_content(frame.text)
+                # Deduplicate LLMTextFrame chunks that may flow through pipeline multiple times
+                if frame.text not in self.processed_text_chunks:
+                    self.processed_text_chunks.add(frame.text)
+                    logger.info(f"[LLM_OUTPUT] LLM generated text chunk (LLMTextFrame): '{frame.text}'")
+                    await self._add_text_content(frame.text)
+                else:
+                    logger.debug(f"[LLM_OUTPUT] Skipping duplicate LLMTextFrame: '{frame.text}'")
 
             elif isinstance(frame, LLMFullResponseEndFrame):
                 logger.info(f"[LLM_OUTPUT] LLM finished generating response")
@@ -217,7 +225,7 @@ class AGUIObserver(BaseObserver):
 
                 # Check what type of response this was and handle accordingly
                 if self.pending_tool_calls == 0 and not self._has_had_tool_calls:
-                    # Simple text response with no tool calls - do soft finish
+                    # Simple text response with no tool calls - finish the run
                     logger.info(f"[LLM_OUTPUT] Simple text response completed - finishing run")
                     await self._finish_run({"status": "completed", "type": "simple_response"})
                 elif self.pending_tool_calls == 0 and self._has_had_tool_calls:
@@ -719,6 +727,9 @@ class AGUIObserver(BaseObserver):
             if self.run_finished and event.type != EventType.RUN_FINISHED:
                 self._log(f"[PROTOCOL_GUARD] Blocking event {event.type} - RUN_FINISHED already sent, stream closed")
                 return
+            
+            # Allow queuing events even when not streaming - they'll be delivered when SSE stream starts
+            # This is crucial for voice-triggered runs where LLM starts generating before HTTP request arrives
                 
             # Encode event as SSE format
             encoded_event = self.encoder.encode(event)
@@ -746,12 +757,13 @@ class AGUIObserver(BaseObserver):
             self.current_memory_usage += event_size
             
             # Enhanced logging for event queuing
+            stream_status = "ACTIVE_STREAM" if self.is_streaming else "NO_STREAM_YET"
             if event.type == "TEXT_MESSAGE_CONTENT":
                 content = getattr(event, 'content', {})
                 text_content = content.get('text', '') if isinstance(content, dict) else str(content)
-                self._log(f"[EVENT_QUEUE] Queued AG-UI event: {event.type} with text: '{text_content[:50]}...' ({event_size} bytes, total: {self.current_memory_usage} bytes)")
+                self._log(f"[EVENT_QUEUE] Queued AG-UI event: {event.type} with text: '{text_content[:50]}...' ({event_size} bytes, total: {self.current_memory_usage} bytes) [{stream_status}]")
             else:
-                self._log(f"[EVENT_QUEUE] Queued AG-UI event: {event.type} ({event_size} bytes, total: {self.current_memory_usage} bytes)")
+                self._log(f"[EVENT_QUEUE] Queued AG-UI event: {event.type} ({event_size} bytes, total: {self.current_memory_usage} bytes) [{stream_status}]")
         
         except MemoryError:
             # Re-raise memory errors to stop the pipeline
