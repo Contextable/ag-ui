@@ -120,6 +120,7 @@ class AGUIObserver(BaseObserver):
         
         # Tool call flow tracking
         self.pending_tool_calls = 0  # Track number of tool calls in progress
+        self._run_finished_sent = False  # Track if RUN_FINISHED already sent for this run
         self.llm_responses_after_tools = 0  # Track LLM responses after tool execution
         self._has_had_tool_calls = False  # Track if we've had tool calls in this conversation
         self._processed_tool_call_ids = set()  # Track processed tool call IDs to prevent duplicates
@@ -158,8 +159,7 @@ class AGUIObserver(BaseObserver):
     
     async def on_task_started(self, task: PipelineTask):
         """Called when pipeline task starts"""
-        # Do NOT auto-start AG-UI stream here - it should only start when an HTTP/SSE request comes in
-        self._log("Pipeline task started - AG-UI stream will start on first HTTP request")
+        await self._start_stream()
     
     async def on_task_ended(self, task: PipelineTask):
         """Called when pipeline task ends"""
@@ -198,16 +198,15 @@ class AGUIObserver(BaseObserver):
                 await self._handle_error(frame)
 
             # Handle user frames (UPSTREAM)
-            elif isinstance(frame, TranscriptionFrame):
-                await self._handle_user_transcription(frame, final=True)
-            elif isinstance(frame, InterimTranscriptionFrame):
-                await self._handle_user_transcription(frame, final=False)
+            # Disabled transcription events to rule out as interference with tool calls
+            # elif isinstance(frame, TranscriptionFrame):
+            #     await self._handle_user_transcription(frame, final=True)
+            # elif isinstance(frame, InterimTranscriptionFrame):
+            #     await self._handle_user_transcription(frame, final=False)
 
             # Handle assistant frames (DOWNSTREAM)
             elif isinstance(frame, LLMFullResponseStartFrame):
                 logger.info(f"[LLM_OUTPUT] LLM started generating response")
-                # Start text message and queue events even if no SSE stream is active yet
-                # This handles voice-triggered runs where LLM starts before HTTP request
                 await self._start_text_message("assistant")
             
             elif isinstance(frame, LLMTextFrame):
@@ -224,8 +223,13 @@ class AGUIObserver(BaseObserver):
                 await self._end_current_message()
 
                 # Check what type of response this was and handle accordingly
-                if self.pending_tool_calls == 0 and not self._has_had_tool_calls:
-                    # Simple text response with no tool calls - finish the run
+                if self._run_finished_sent:
+                    # RUN_FINISHED already sent for client-side tools, but still need to close stream
+                    logger.info(f"[LLM_OUTPUT] LLM response completed, RUN_FINISHED already sent for client tools - closing stream without duplicate message")
+                    self.run_finished = True  # Mark as finished to prevent other issues
+                    await self._close_stream()
+                elif self.pending_tool_calls == 0 and not self._has_had_tool_calls:
+                    # Simple text response with no tool calls - do soft finish
                     logger.info(f"[LLM_OUTPUT] Simple text response completed - finishing run")
                     await self._finish_run({"status": "completed", "type": "simple_response"})
                 elif self.pending_tool_calls == 0 and self._has_had_tool_calls:
@@ -280,6 +284,8 @@ class AGUIObserver(BaseObserver):
                 
                 # Process client-side tools: send to client and soft finish
                 if client_tool_calls:
+                    # Mark that we've had tool calls to prevent premature stream closure
+                    self._has_had_tool_calls = True
                     await self._end_current_message()
                     
                     for func_call in client_tool_calls:
@@ -296,6 +302,7 @@ class AGUIObserver(BaseObserver):
                     
                     # Use "soft finish" to signal client to execute tools while keeping pipeline active
                     await self._send_run_finished_event({"status": "awaiting_tool_results", "type": "tool_calls_sent"})
+                    self._run_finished_sent = True  # Mark that we've sent RUN_FINISHED for this run
                 
                 # Process server-side tools: track for state management
                 if server_tool_calls:
@@ -385,18 +392,19 @@ class AGUIObserver(BaseObserver):
     
     async def _finish_run(self, result: Any = None):
         """
-        Send run finished event and end the stream.
-        This is a "hard finish" that both sends the event and closes the stream.
+        Send run finished event and then close the stream.
+        This ensures RUN_FINISHED is sent before the SSE connection closes.
         """
         if not self.is_streaming or self.run_finished:
             return
         
-        # Mark as finished to prevent duplicates
+        # Send the RUN_FINISHED event BEFORE marking as finished
+        await self._send_run_finished_event(result)  # Send the RUN_FINISHED event
+        
+        # Now mark as finished to prevent duplicates
         self.run_finished = True
         
-        await self._send_run_finished_event(result)  # Call the soft finish to send the event
-        
-        # Close the stream after RUN_FINISHED - this is what closes the SSE connection
+        # Close the stream after RUN_FINISHED is sent - this signals completion to the client
         await self._close_stream()
     
     async def _close_stream(self):
@@ -430,9 +438,20 @@ class AGUIObserver(BaseObserver):
     
     async def reset_for_new_run(self, accept_header=None):
         """
-        Completely resets the observer's state for a new, isolated run.
+        Resets observer state for a new run, or extends existing run if still active.
         This should be called at the beginning of a new SSE request.
         """
+        # Check if there's already an active run that hasn't finished
+        if self.is_streaming and not self.run_finished:
+            self._log(f"!!! EXTENDING existing run {self.run_id} instead of creating new run !!!")
+            # Don't reset - just continue with the existing run
+            # The new messages will be processed as part of the current run
+            # Just reinitialize the encoder to handle the new SSE request
+            from ag_ui.encoder import EventEncoder
+            self.encoder = EventEncoder(accept=accept_header)
+            self._log(f"Reinitialized encoder for existing run {self.run_id}")
+            return
+            
         self._log("!!! Resetting observer state for a new run !!!")
 
         # 1. Asynchronously drain any stale events from the queue
@@ -465,6 +484,7 @@ class AGUIObserver(BaseObserver):
         self.llm_responses_after_tools = 0
         self._has_had_tool_calls = False
         self._processed_tool_call_ids.clear()  # Clear processed tool call IDs for new run
+        self._run_finished_sent = False  # Reset RUN_FINISHED flag for new run
         # NOTE: Do NOT clear processed_message_ids or processed_tool_result_ids
         # They must persist across runs to prevent infinite loops when the client
         # sends back message history and tool results in subsequent requests
@@ -727,9 +747,6 @@ class AGUIObserver(BaseObserver):
             if self.run_finished and event.type != EventType.RUN_FINISHED:
                 self._log(f"[PROTOCOL_GUARD] Blocking event {event.type} - RUN_FINISHED already sent, stream closed")
                 return
-            
-            # Allow queuing events even when not streaming - they'll be delivered when SSE stream starts
-            # This is crucial for voice-triggered runs where LLM starts generating before HTTP request arrives
                 
             # Encode event as SSE format
             encoded_event = self.encoder.encode(event)
@@ -757,13 +774,12 @@ class AGUIObserver(BaseObserver):
             self.current_memory_usage += event_size
             
             # Enhanced logging for event queuing
-            stream_status = "ACTIVE_STREAM" if self.is_streaming else "NO_STREAM_YET"
             if event.type == "TEXT_MESSAGE_CONTENT":
                 content = getattr(event, 'content', {})
                 text_content = content.get('text', '') if isinstance(content, dict) else str(content)
-                self._log(f"[EVENT_QUEUE] Queued AG-UI event: {event.type} with text: '{text_content[:50]}...' ({event_size} bytes, total: {self.current_memory_usage} bytes) [{stream_status}]")
+                self._log(f"[EVENT_QUEUE] Queued AG-UI event: {event.type} with text: '{text_content[:50]}...' ({event_size} bytes, total: {self.current_memory_usage} bytes)")
             else:
-                self._log(f"[EVENT_QUEUE] Queued AG-UI event: {event.type} ({event_size} bytes, total: {self.current_memory_usage} bytes) [{stream_status}]")
+                self._log(f"[EVENT_QUEUE] Queued AG-UI event: {event.type} ({event_size} bytes, total: {self.current_memory_usage} bytes)")
         
         except MemoryError:
             # Re-raise memory errors to stop the pipeline
@@ -803,10 +819,10 @@ class AGUIObserver(BaseObserver):
                 except asyncio.TimeoutError:
                     # Send heartbeat if no events for 30 seconds
                     if self.is_healthy():
-                        yield "data: {\"type\":\"heartbeat\"}\\n\\n"
+                        yield "data: {\"type\":\"heartbeat\"}\n\n"
                     else:
                         # Send health warning with heartbeat
-                        yield f"data: {{\"type\":\"heartbeat\",\"healthy\":false,\"error_count\":{self.error_count}}}\\n\\n"
+                        yield f"data: {{\"type\":\"heartbeat\",\"healthy\":false,\"error_count\":{self.error_count}}}\n\n"
                 except asyncio.CancelledError:
                     self._log("SSE stream cancelled")
                     break

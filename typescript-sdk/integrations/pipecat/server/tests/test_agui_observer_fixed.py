@@ -171,7 +171,7 @@ class TestAGUIObserver:
     @pytest.mark.asyncio
     async def test_llm_text_frame_processing(self, observer):
         """Test LLM text frames are processed correctly"""
-        # on_task_started doesn't auto-start streaming anymore
+        # First start the stream (normally done by on_task_started)
         await observer.on_task_started(Mock())
         
         frame = LLMTextFrame("Hello World")
@@ -180,7 +180,7 @@ class TestAGUIObserver:
         # Processing LLM text should create a message
         await observer.on_push_frame(mock_data)
         
-        # Streaming doesn't auto-start, but message ID should be created
+        assert observer.is_streaming
         assert observer.current_message_id is not None
         # Check that events were queued
         assert not observer.event_queue.empty()
@@ -265,11 +265,11 @@ class TestAGUIObserver:
     @pytest.mark.asyncio
     async def test_task_lifecycle_methods(self, observer, mock_task):
         """Test task start/end methods"""
-        with patch.object(observer, '_end_stream') as mock_end:
+        with patch.object(observer, '_start_stream') as mock_start, \
+             patch.object(observer, '_end_stream') as mock_end:
             
-            # on_task_started no longer auto-starts streaming
             await observer.on_task_started(mock_task)
-            # No stream auto-start expected
+            mock_start.assert_called_once()
             
             await observer.on_task_ended(mock_task)
             mock_end.assert_called_once()

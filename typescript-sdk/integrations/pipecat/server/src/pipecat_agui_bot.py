@@ -34,6 +34,7 @@ import os
 import sys
 import logging
 import uvicorn
+import time
 from typing import Dict, Any
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse
@@ -92,6 +93,10 @@ class PipecatAGUIBot:
         self.services: Dict[str, Any] = {}  # Will be set when services are created
         self.connection_filter: FunctionFilter = None  # Will be set when services are created
         self.tts_on: bool = False #TTS is off by default
+        
+        # Debouncing for empty developer message triggers (voice user-started-speaking)
+        self.last_empty_trigger_time = 0
+        self.empty_trigger_debounce_seconds = 2.0  # Prevent multiple triggers within 2 seconds
         
         # Create FastAPI app for HTTP/SSE endpoint
         self.app = FastAPI(title="Pipecat AG-UI Bot")
@@ -385,7 +390,17 @@ class PipecatAGUIBot:
                         else:
                             logger.info(f"[TRIGGER] Developer message already processed, skipping: '{message.content}'")
                     else:
-                        logger.info(f"[TRIGGER] Empty developer message received as run trigger only")
+                        # Empty developer message - implement debouncing to prevent rapid-fire triggers
+                        current_time = time.time()
+                        time_since_last_trigger = current_time - self.last_empty_trigger_time
+                        
+                        if time_since_last_trigger >= self.empty_trigger_debounce_seconds:
+                            self.last_empty_trigger_time = current_time
+                            logger.info(f"[TRIGGER] Empty developer message received as run trigger (debounced)")
+                        else:
+                            logger.info(f"[TRIGGER] Empty developer message IGNORED due to debouncing ({time_since_last_trigger:.1f}s < {self.empty_trigger_debounce_seconds}s)")
+                            # Skip this message by continuing to next one
+                            continue
                 
                 elif message.role == "tool":
                     new_tool_results.append(message)
