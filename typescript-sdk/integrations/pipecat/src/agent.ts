@@ -1,6 +1,13 @@
+"use client";
+
 import { HttpAgent } from "@ag-ui/client";
-import { RunAgentInput } from "@ag-ui/core";
+import { BaseEvent, RunAgentInput } from "@ag-ui/core";
 import { PipecatAgentConfig } from "./types";
+import { Observable } from "rxjs";  
+import { tap } from "rxjs/operators";  
+import { transformHttpEventStream } from "@ag-ui/client";
+import { runHttpRequest} from "@ag-ui/client";
+import { HttpEvent, HttpEventType } from "@ag-ui/client/src/run/http-request";  
 
 export class PipecatAgent extends HttpAgent {
   constructor(config: PipecatAgentConfig) {
@@ -22,6 +29,21 @@ export class PipecatAgent extends HttpAgent {
       body: JSON.stringify(input),
       signal: this.abortController.signal,
     };
+  }
+
+  public run(input: RunAgentInput): Observable<BaseEvent> {  
+    console.log('PipecatAgent: Starting run with input:', input);  
+    
+    // Use the standard HttpAgent implementation to avoid Observable pipeline issues
+    return super.run(input).pipe(  
+      tap((event) => {  
+        console.log('PipecatAgent: Parsed event:', event);  
+          
+        if (event.type.startsWith('TOOL_CALL_')) {  
+          console.log('PipecatAgent: Tool event detected:', event);  
+        }  
+      })  
+    );  
   }
 
   // The run method is inherited from HttpAgent, which handles:

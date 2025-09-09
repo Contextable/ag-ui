@@ -70,6 +70,7 @@ export const usePipecatVoice = (props: PipecatVoiceProps) => {
         transport,
         enableMic: config.enableMic ?? true,
         enableCam: false,
+        ...(({ user_llm_enabled: false }) as any), // Disable user-llm-text messages that cause WebSocket closure
         callbacks: {
           onConnected: () => {
             console.log('[PipecatVoice] Connected');
