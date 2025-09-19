@@ -1,3 +1,5 @@
+## Note: ADK Middleware has now been merged to the main AG-UI repo and can be found [here](https://github.com/ag-ui-protocol/ag-ui/tree/main/typescript-sdk/integrations/adk-middleware).
+
 # ADK Middleware for AG-UI Protocol
 
 This Python middleware enables [Google ADK](https://google.github.io/adk-docs/) agents to be used with the AG-UI Protocol, providing a bridge between the two frameworks.
