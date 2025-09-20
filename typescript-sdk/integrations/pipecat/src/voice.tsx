@@ -1,3 +1,5 @@
+"use client";
+
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { PipecatClient, PipecatClientOptions, RTVIEvent } from "@pipecat-ai/client-js";
 import { WebSocketTransport } from "@pipecat-ai/websocket-transport";
@@ -55,6 +57,7 @@ export const usePipecatVoice = (props: PipecatVoiceProps) => {
       const options: PipecatClientOptions = {
         transport,
         enableMic: config.enableMic ?? true,
+        // Don't set baseUrl or endpoints.connect to bypass handshake for direct WebSocket connection
       };
 
       const client = new PipecatClient(options);
@@ -99,14 +102,16 @@ export const usePipecatVoice = (props: PipecatVoiceProps) => {
 
       clientRef.current = client;
       
-      // Start bot and connect using the configured endpoint
-      await client.startBotAndConnect({
-        endpoint: config.websocketUrl,
-        headers: new Headers(config.authHeaders || {}),
+      // Connect directly to WebSocket (bypassing HTTP handshake for local development)
+      console.log('[PipecatVoice] Connecting directly to WebSocket:', config.websocketUrl);
+      await client.connect({
+        wsUrl: config.websocketUrl,
+        endpoint: "http://localhost:8765",
         timeout: config.timeout,
       });
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
+      console.error('[PipecatVoice] Connection error:', error);
       setState(prev => ({ ...prev, error: err.message, isConnecting: false }));
       onError?.(err);
     }

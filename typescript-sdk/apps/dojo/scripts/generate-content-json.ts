@@ -210,7 +210,10 @@ const agentFilesMapper: Record<string, (agentKeys: string[]) => Record<string, s
       ...acc,
       [agentId]: [path.join(__dirname, integrationsFolderPath, `/adk-middleware/python/examples/server/api/${agentId}.py`)]
     }), {})
-  }
+  },
+  'pipecat': () => ({
+    agentic_chat: [path.join(__dirname, integrationsFolderPath, `/pipecat/src/index.ts`)]
+  })
 }
 
 async function runGenerateContent() {

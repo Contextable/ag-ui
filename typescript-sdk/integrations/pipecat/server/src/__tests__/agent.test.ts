@@ -1,5 +1,5 @@
-import { PipecatAgent } from "../agent";
-import { PipecatAgentConfig } from "../types";
+import { PipecatAgent } from "../../../src/agent";
+import { PipecatAgentConfig } from "../../../src/types";
 import { HttpAgent } from "@ag-ui/client";
 
 describe("PipecatAgent", () => {
