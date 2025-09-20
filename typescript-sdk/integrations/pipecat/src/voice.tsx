@@ -65,23 +65,34 @@ export const usePipecatVoice = (props: PipecatVoiceProps) => {
       }
 
       const transport = new WebSocketTransport();
-      
+
+      const handleConnected = () => {
+        console.log('[PipecatVoice] Connected');
+        setState(prev => ({ ...prev, isConnected: true, isConnecting: false }));
+        onConnected?.();
+      };
+
+      const handleDisconnected = () => {
+        console.log('[PipecatVoice] Disconnected');
+        setState(prev => ({ ...prev, isConnected: false, isConnecting: false }));
+        onDisconnected?.();
+      };
+
+      const handleError = (error: any) => {
+        console.error('[PipecatVoice] Error:', error);
+        const errorMsg = error?.message || 'Unknown error';
+        setState(prev => ({ ...prev, error: errorMsg, isConnecting: false }));
+        onError?.(new Error(errorMsg));
+      };
+
       const options: PipecatClientOptions = {
         transport,
         enableMic: config.enableMic ?? true,
         enableCam: false,
         ...(({ user_llm_enabled: false }) as any), // Disable user-llm-text messages that cause WebSocket closure
         callbacks: {
-          onConnected: () => {
-            console.log('[PipecatVoice] Connected');
-            setState(prev => ({ ...prev, isConnected: true, isConnecting: false }));
-            onConnected?.();
-          },
-          onDisconnected: () => {
-            console.log('[PipecatVoice] Disconnected');
-            setState(prev => ({ ...prev, isConnected: false, isConnecting: false }));
-            onDisconnected?.();
-          },
+          onConnected: handleConnected,
+          onDisconnected: handleDisconnected,
           onBotReady: (data: any) => {
             console.log('[PipecatVoice] Bot ready:', data);
             setupMediaTracks();
@@ -100,16 +111,15 @@ export const usePipecatVoice = (props: PipecatVoiceProps) => {
             setState(prev => ({ ...prev, error: errorMsg }));
             onError?.(new Error(errorMsg));
           },
-          onError: (error: any) => {
-            console.error('[PipecatVoice] Error:', error);
-            const errorMsg = error?.message || 'Unknown error';
-            setState(prev => ({ ...prev, error: errorMsg, isConnecting: false }));
-            onError?.(new Error(errorMsg));
-          },
+          onError: handleError,
         },
       };
 
       const client = new PipecatClient(options);
+
+      client.on(RTVIEvent.Connected, handleConnected);
+      client.on(RTVIEvent.Disconnected, handleDisconnected);
+      client.on(RTVIEvent.Error, handleError);
 
       // Set up additional event listeners for speaking states with debugging
       client.on(RTVIEvent.UserStartedSpeaking, () => {
@@ -153,8 +163,8 @@ export const usePipecatVoice = (props: PipecatVoiceProps) => {
       // Setup helper functions
       const setupMediaTracks = () => {
         if (!client) return;
-        const tracks = client.tracks();
-        if (tracks.bot?.audio) {
+        const tracks = typeof client.tracks === "function" ? client.tracks() : undefined;
+        if (tracks?.bot?.audio) {
           setupAudioTrack(tracks.bot.audio);
         }
       };
@@ -172,11 +182,23 @@ export const usePipecatVoice = (props: PipecatVoiceProps) => {
         botAudioRef.current.srcObject = new MediaStream([track]);
       };
       
-      // Initialize devices and connect
-      await client.initDevices();
-      await client.connect({ 
-        wsUrl: config.websocketUrl
-      });
+      // Initialize devices when supported
+      if (typeof (client as any).initDevices === "function") {
+        await (client as any).initDevices();
+      }
+
+      const connectionOptions = {
+        wsUrl: config.websocketUrl,
+        timeout: config.timeout,
+      };
+
+      if (typeof (client as any).startBotAndConnect === "function") {
+        await (client as any).startBotAndConnect(connectionOptions);
+      } else if (typeof client.connect === "function") {
+        await client.connect(connectionOptions);
+      } else {
+        throw new Error("Pipecat client does not support connect APIs");
+      }
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
       console.error('[PipecatVoice] Connection error:', error);
