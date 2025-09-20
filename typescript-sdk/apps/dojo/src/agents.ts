@@ -16,7 +16,7 @@ import getEnvVars from "./env";
 import { mastra } from "./mastra";
 import { PydanticAIAgent } from "@ag-ui/pydantic-ai";
 import { ADKAgent } from "@ag-ui/adk";
-import { PipecatAgent } from "@ag-ui/pipecat";\ call integration)
+import { PipecatAgent } from "@ag-ui/pipecat";
 
 const envVars = getEnvVars();
 export const agentsIntegrations: AgentIntegrationConfig[] = [
