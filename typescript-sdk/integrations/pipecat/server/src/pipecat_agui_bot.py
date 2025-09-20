@@ -34,7 +34,6 @@ import os
 import sys
 import logging
 import uvicorn
-import time
 from typing import Dict, Any
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse
@@ -45,8 +44,8 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-from pipecat.frames.frames import LLMMessagesFrame, EndFrame, LLMSetToolsFrame, StartInterruptionFrame
-from pipecat.adapters.schemas.tools_schema import FunctionSchema, ToolsSchema
+from pipecat.frames.frames import LLMMessagesFrame, EndFrame, StartInterruptionFrame
+from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
@@ -66,6 +65,7 @@ from pipecat.utils.text.markdown_text_filter import MarkdownTextFilter
 
 # Import our AG-UI bridge
 from agui_bridge import AGUIObserver
+from agui_integration import AGUIRunProcessor
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -88,15 +88,15 @@ class PipecatAGUIBot:
     def __init__(self, config: Dict[str, Any]):
         self.config = config
         self.session: aiohttp.ClientSession = None
-        self.agui_observer: AGUIObserver = None
+        self.agui_observer: AGUIObserver = AGUIObserver(
+            debug=True,
+            max_memory_mb=self.config.get("max_memory_mb", 100),
+        )
+        self.agui_processor: AGUIRunProcessor = AGUIRunProcessor(self.agui_observer)
         self.pipeline_task: PipelineTask = None  # Will be set when pipeline runs
         self.services: Dict[str, Any] = {}  # Will be set when services are created
         self.connection_filter: FunctionFilter = None  # Will be set when services are created
         self.tts_on: bool = False #TTS is off by default
-        
-        # Debouncing for empty developer message triggers (voice user-started-speaking)
-        self.last_empty_trigger_time = 0
-        self.empty_trigger_debounce_seconds = 2.0  # Prevent multiple triggers within 2 seconds
         
         # Create FastAPI app for HTTP/SSE endpoint
         self.app = FastAPI(title="Pipecat AG-UI Bot")
@@ -141,12 +141,6 @@ class PipecatAGUIBot:
         
         # Create HTTP session for AG-UI communication
         self.session = aiohttp.ClientSession()
-        
-        # Create AG-UI observer with debug enabled to track text content
-        self.agui_observer = AGUIObserver(
-            debug=True,  # Always enable debug for detailed text logging
-            max_memory_mb=self.config.get("max_memory_mb", 100)
-        )
         
         # WebSocket server transport
         ws_host = self.config.get("websocket_host", "0.0.0.0") 
@@ -254,197 +248,16 @@ class PipecatAGUIBot:
         }
     
     def convert_agui_tools_to_pipecat(self, agui_tools: list) -> ToolsSchema:
-        """Convert AG-UI Tool objects to Pipecat ToolsSchema format"""
-        pipecat_functions = []
-        
-        for tool in agui_tools:
-            # Extract properties and required from AG-UI parameters JSON Schema
-            parameters = tool.parameters
-            properties = parameters.get("properties", {})
-            required = parameters.get("required", [])
-            
-            # Convert AG-UI Tool to Pipecat FunctionSchema
-            function_schema = FunctionSchema(
-                name=tool.name,
-                description=tool.description,
-                properties=properties,
-                required=required
-            )
-            pipecat_functions.append(function_schema)
-            
-            logger.info(f"Converted tool '{tool.name}' to Pipecat format")
-            logger.info(f"Tool description: '{tool.description}'")
-        
-        return ToolsSchema(standard_tools=pipecat_functions)
+        """Convert AG-UI tool definitions into Pipecat format."""
+        return self.agui_processor.convert_agui_tools_to_pipecat(agui_tools)
 
     async def register_tool_handlers(self, agui_tools: list, llm_service):
-        """Register tool handlers with the LLM service"""
-        from pipecat.services.llm_service import FunctionCallParams
-        
-        for tool in agui_tools:
-            if tool.name in self.agui_observer.current_client_tool_names:
-                # --- THIS IS THE KEY FIX ---
-                # Register a placeholder handler for CLIENT-SIDE tools.
-                # This acknowledges the tool call for the LLM without executing anything on the server.
-                async def client_tool_handler(params: FunctionCallParams):
-                    logger.info(f"Acknowledged client-side tool call: '{params.function_name}'")
-                    # Return a generic success message to satisfy the LLM
-                    return {
-                        "status": "success",
-                        "message": f"Client-side tool '{params.function_name}' acknowledged."
-                    }
-                
-                llm_service.register_function(tool.name, client_tool_handler)
-                logger.info(f"Registered placeholder handler for client-side tool: '{tool.name}'")
-                # ---------------------------
-            else:
-                # This is a server-side tool, so we register the full handler for it
-                async def tool_handler(params: FunctionCallParams):
-                    logger.info(f"Tool '{params.function_name}' called with args: {params.arguments}")
-                    logger.info(f"Tool call ID: {params.tool_call_id}")
-                    
-                    # TODO: Implement actual tool execution bridge between AG-UI and Pipecat
-                    # This placeholder should:
-                    # 1. Forward the tool call to AG-UI stream as a tool_call_start event
-                    # 2. Execute the tool through AG-UI's tool system
-                    # 3. Stream tool progress/results back through AG-UI observer
-                    # 4. Return the final result to Pipecat for LLM processing
-                    result = {
-                        "status": "success",
-                        "message": f"Tool '{params.function_name}' executed with args: {params.arguments}",
-                        "result": "Tool execution placeholder - integrate with AG-UI tool system"
-                    }
-                    
-                    logger.info(f"Tool '{params.function_name}' completed with result: {result}")
-                    
-                    # Call the result callback if provided
-                    if params.result_callback:
-                        await params.result_callback(result)
-                    
-                    return result
-                
-                llm_service.register_function(tool.name, tool_handler)
-                logger.info(f"Registered handler for server-side tool '{tool.name}'")
+        """Register tool handlers with the LLM service."""
+        await self.agui_processor.register_tool_handlers(agui_tools, llm_service)
 
     async def process_agui_input(self, input_data, services: Dict[str, Any], task: PipelineTask):
-        """
-        Process AG-UI RunAgentInput by identifying only the new messages and tool
-        results since the last turn, preventing context pollution and infinite loops.
-        This version includes an optimization to stop searching history once a known
-        message is found.
-        """
-        try:
-            frames_to_queue = []
-
-            # First, ensure tools are set for the LLM and handlers are registered.
-            if hasattr(input_data, 'tools') and input_data.tools:
-                logger.info(f"Processing {len(input_data.tools)} tools from AG-UI input")
-
-                # 1. Convert AG-UI tools to Pipecat's provider-independent ToolsSchema.
-                #    This is the recommended approach.
-                tools_schema = self.convert_agui_tools_to_pipecat(input_data.tools)
-                
-                # 2. Create the frame with the ToolsSchema object. Pipecat's adapters
-                #    will handle converting this to the correct format for the LLM.
-                from pipecat.frames.frames import LLMSetToolsFrame
-                tools_frame = LLMSetToolsFrame(tools=tools_schema)
-                frames_to_queue.append(tools_frame)
-                
-                # 3. Register handlers for these tools for server-side execution.
-                if self.agui_observer:
-                    self.agui_observer.set_client_tools(input_data.tools)
-                await self.register_tool_handlers(input_data.tools, services["llm"])
-                logger.info("Tool handlers registered and definitions sent to LLM.")
-
-            # Identify the new, unprocessed items from the incoming message list.
-            newest_user_message = None
-            new_tool_results = []
-
-            for message in reversed(input_data.messages):
-                message_id = getattr(message, 'id', None) or getattr(message, 'message_id', None)
-                tool_call_id = getattr(message, 'tool_call_id', None)
-
-                if (message_id and message_id in self.agui_observer.processed_message_ids) or \
-                   (tool_call_id and tool_call_id in self.agui_observer.processed_tool_result_ids):
-                    logger.info(f"Found known message/tool_result ID. Stopping history scan.")
-                    break
-
-                if message.role == "user":
-                    if not newest_user_message:
-                        newest_user_message = message
-                elif message.role == "developer":
-                    # Developer messages with content become system instructions and trigger LLM
-                    # Empty developer messages are just run triggers
-                    if message.content and message.content.strip():
-                        # Check if we've already processed this developer message ID to avoid duplicates
-                        if message.id not in self.agui_observer.processed_message_ids:
-                            # Add system instruction and trigger LLM run
-                            from pipecat.frames.frames import LLMMessagesAppendFrame
-                            system_message_frame = LLMMessagesAppendFrame(  
-                                 messages=[{"role": "system", "content": message.content}],  
-                                 run_llm=True  
-                            )  
-                            frames_to_queue.extend([system_message_frame])
-                            self.agui_observer.processed_message_ids.add(message.id)
-                            logger.info(f"[TRIGGER] Developer message converted to system instruction with LLM trigger: '{message.content}'")
-                        else:
-                            logger.info(f"[TRIGGER] Developer message already processed, skipping: '{message.content}'")
-                    else:
-                        # Empty developer message - implement debouncing to prevent rapid-fire triggers
-                        current_time = time.time()
-                        time_since_last_trigger = current_time - self.last_empty_trigger_time
-                        
-                        if time_since_last_trigger >= self.empty_trigger_debounce_seconds:
-                            self.last_empty_trigger_time = current_time
-                            logger.info(f"[TRIGGER] Empty developer message received as run trigger (debounced)")
-                        else:
-                            logger.info(f"[TRIGGER] Empty developer message IGNORED due to debouncing ({time_since_last_trigger:.1f}s < {self.empty_trigger_debounce_seconds}s)")
-                            # Skip this message by continuing to next one
-                            continue
-                
-                elif message.role == "tool":
-                    new_tool_results.append(message)
-
-            # Process new tool results first, in chronological order.
-            if new_tool_results:
-                for tool_result in reversed(new_tool_results):
-                    tool_call_id = tool_result.tool_call_id
-                    metadata = self.agui_observer.tool_call_metadata.get(tool_call_id)
-                    if metadata:
-                        from pipecat.frames.frames import FunctionCallResultFrame
-                        result_frame = FunctionCallResultFrame(
-                            function_name=metadata["function_name"],
-                            tool_call_id=tool_call_id,
-                            arguments=metadata["arguments"],
-                            result=tool_result.content
-                        )
-                        frames_to_queue.append(result_frame)
-                        self.agui_observer.processed_tool_result_ids.add(tool_call_id)
-                        logger.info(f"Processed new tool result for {metadata['function_name']} with ID {tool_call_id}")
-                    else:
-                        logger.error(f"No metadata found for new tool_call_id: {tool_call_id}")
-
-            # If there's a new user message, process it. This triggers the LLM.
-            if newest_user_message:
-                message_id = getattr(newest_user_message, 'id', None) or getattr(newest_user_message, 'message_id', None)
-                logger.info(f"Injecting newest user message: {newest_user_message.content}")
-                if message_id:
-                    self.agui_observer.processed_message_ids.add(message_id)
-                    logger.info(f"Tracked message ID: {message_id}")
-
-                from pipecat.frames.frames import LLMMessagesAppendFrame
-                messages_frame = LLMMessagesAppendFrame(
-                    messages=[{"role": "user", "content": newest_user_message.content}],
-                    run_llm=True
-                )
-                frames_to_queue.append(messages_frame)
-
-            # Queue all frames at once for this turn
-            if frames_to_queue:
-                await task.queue_frames(frames_to_queue)
-
-        except Exception as e:
-            logger.error(f"Error processing AG-UI input: {e}", exc_info=True)
+        """Process AG-UI RunAgentInput and queue Pipecat frames."""
+        await self.agui_processor.process_agui_input(input_data, services, task)
     
     async def setup_rtvi_handlers(self, services: Dict[str, Any], task: PipelineTask):
         """Set up RTVI event handlers"""
