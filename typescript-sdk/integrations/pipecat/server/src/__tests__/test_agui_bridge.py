@@ -12,7 +12,7 @@ from unittest.mock import Mock, AsyncMock, patch
 from typing import List, Any
 
 # Import the module under test
-from agui_bridge import AGUIObserver
+from src.agui_bridge import AGUIObserver
 
 # Import actual AG-UI events
 from ag_ui.core.events import (
@@ -128,21 +128,21 @@ class TestAGUIObserver:
         
         # Test message start
         start_frame = mock_frames.LLMFullResponseStartFrame()
-        await observer.on_frame_processed(mock_task, start_frame, None)
+        await observer.on_push_frame(Mock(frame=start_frame))
         
         assert observer.current_message_id is not None
         
         # Test message content
         text_frame = mock_frames.TextFrame()
         text_frame.text = "Hello, world!"
-        await observer.on_frame_processed(mock_task, text_frame, None)
+        await observer.on_push_frame(Mock(frame=text_frame))
         
         # Verify event was queued
         assert not observer.event_queue.empty()
         
         # Test message end
         end_frame = mock_frames.LLMFullResponseEndFrame()
-        await observer.on_frame_processed(mock_task, end_frame, None)
+        await observer.on_push_frame(Mock(frame=end_frame))
         
         assert observer.current_message_id is None
     
@@ -151,23 +151,26 @@ class TestAGUIObserver:
         """Test tool call start and result flow"""
         observer = AGUIObserver()
         mock_task = Mock()
-        
+
+        # Set up client tools so the tool call will trigger the client-side path
+        observer.set_client_tools([Mock(name="test_function")])
+
         # Start streaming first
         await observer._start_stream()
         
         # Test tool call start
-        tool_start_frame = mock_frames.FunctionCallInProgressFrame()
-        tool_start_frame.tool_call_id = "test_tool_123"
-        tool_start_frame.tool_call_name = "test_function"
-        await observer.on_frame_processed(mock_task, tool_start_frame, None)
+        tool_start_frame = mock_frames.FunctionCallsStartedFrame()
+        tool_start_frame.function_calls = [Mock(tool_call_id="test_tool_123", function_name="test_function")]
+        await observer.on_push_frame(Mock(frame=tool_start_frame))
         
-        assert observer.current_tool_call_id == "test_tool_123"
+        # Verify events were generated and queued
+        assert not observer.event_queue.empty()
         
         # Test tool call result
         tool_result_frame = mock_frames.FunctionCallResultFrame()
         tool_result_frame.tool_call_id = "test_tool_123"
         tool_result_frame.result = {"status": "success", "data": "test result"}
-        await observer.on_frame_processed(mock_task, tool_result_frame, None)
+        await observer.on_push_frame(Mock(frame=tool_result_frame))
         
         # Verify events were queued
         assert not observer.event_queue.empty()
@@ -183,11 +186,11 @@ class TestAGUIObserver:
         
         # Test user started speaking
         start_speaking_frame = mock_frames.UserStartedSpeakingFrame()
-        await observer.on_frame_processed(mock_task, start_speaking_frame, None)
+        await observer.on_push_frame(Mock(frame=start_speaking_frame))
         
         # Test user stopped speaking
         stop_speaking_frame = mock_frames.UserStoppedSpeakingFrame()
-        await observer.on_frame_processed(mock_task, stop_speaking_frame, None)
+        await observer.on_push_frame(Mock(frame=stop_speaking_frame))
         
         # Verify events were queued
         assert not observer.event_queue.empty()
@@ -204,12 +207,12 @@ class TestAGUIObserver:
         # Test final transcription
         transcription_frame = mock_frames.TranscriptionFrame()
         transcription_frame.text = "Hello from user"
-        await observer.on_frame_processed(mock_task, transcription_frame, None)
+        await observer.on_push_frame(Mock(frame=transcription_frame))
         
         # Test interim transcription
         interim_frame = mock_frames.InterimTranscriptionFrame()
         interim_frame.text = "Hello from..."
-        await observer.on_frame_processed(mock_task, interim_frame, None)
+        await observer.on_push_frame(Mock(frame=interim_frame))
         
         # Verify events were queued
         assert not observer.event_queue.empty()
@@ -226,7 +229,7 @@ class TestAGUIObserver:
         # Test error frame
         error_frame = mock_frames.ErrorFrame()
         error_frame.error = Exception("Test error")
-        await observer.on_frame_processed(mock_task, error_frame, None)
+        await observer.on_push_frame(Mock(frame=error_frame))
         
         # Verify error event was queued
         assert not observer.event_queue.empty()
@@ -384,7 +387,7 @@ class TestIntegration:
         
         # Process all frames
         for frame in frames_sequence:
-            await observer.on_frame_processed(mock_task, frame, None)
+            await observer.on_push_frame(Mock(frame=frame))
         
         # Verify proper event sequence was generated
         assert observer.is_streaming is False  # Stream should be ended
@@ -399,18 +402,19 @@ class TestIntegration:
         observer = AGUIObserver()
         mock_task = Mock()
         
-        # Simulate tool usage flow
+        # Simulate tool usage flow - create frames correctly
+        tool_start_frame = mock_frames.FunctionCallsStartedFrame()
+        tool_start_frame.function_calls = [Mock(tool_call_id="weather_123", function_name="get_weather")]
+
+        tool_result_frame = mock_frames.FunctionCallResultFrame()
+        tool_result_frame.tool_call_id = "weather_123"
+        tool_result_frame.result = {"temperature": 72, "conditions": "sunny"}
+
         frames_sequence = [
             mock_frames.StartFrame(),
             mock_frames.LLMFullResponseStartFrame(),
-            mock_frames.FunctionCallInProgressFrame(
-                tool_call_id="weather_123",
-                tool_call_name="get_weather"
-            ),
-            mock_frames.FunctionCallResultFrame(
-                tool_call_id="weather_123",
-                result={"temperature": 72, "conditions": "sunny"}
-            ),
+            tool_start_frame,
+            tool_result_frame,
             mock_frames.TextFrame(text="The weather is 72°F and sunny!"),
             mock_frames.LLMFullResponseEndFrame(),
             mock_frames.EndFrame(),
@@ -418,11 +422,12 @@ class TestIntegration:
         
         # Process all frames
         for frame in frames_sequence:
-            await observer.on_frame_processed(mock_task, frame, None)
+            await observer.on_push_frame(Mock(frame=frame))
         
         # Verify events were generated and queued
         assert not observer.event_queue.empty()
-        assert observer.current_tool_call_id == "weather_123"
+        # After tool call completes, current_tool_call_id should be None
+        assert observer.current_tool_call_id is None
 
 
 if __name__ == "__main__":

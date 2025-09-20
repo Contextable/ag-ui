@@ -31,16 +31,25 @@ describe("PipecatVoice", () => {
   beforeEach(() => {
     // Reset mocks
     jest.clearAllMocks();
-    
+
     // Create mock client
     mockClient = {
-      startBotAndConnect: jest.fn().mockResolvedValue(undefined),
+      initDevices: jest.fn().mockResolvedValue(undefined),
+      connect: jest.fn().mockResolvedValue(undefined),
       disconnect: jest.fn().mockResolvedValue(undefined),
       enableMic: jest.fn(),
       on: jest.fn(),
+      tracks: jest.fn().mockReturnValue({ bot: { audio: null } }),
     } as any;
-    
-    (PipecatClient as jest.Mock).mockImplementation(() => mockClient);
+
+    // Mock PipecatClient to capture callbacks and simulate them
+    (PipecatClient as jest.Mock).mockImplementation((options) => {
+      // Store callbacks for later simulation
+      if (options?.callbacks) {
+        mockClient._callbacks = options.callbacks;
+      }
+      return mockClient;
+    });
 
     config = {
       websocketUrl: "ws://localhost:8000/ws",
@@ -94,7 +103,8 @@ describe("PipecatVoice", () => {
         authHeaders: { "Authorization": "Bearer token123" }
       };
       
-      mockClient.startBotAndConnect.mockResolvedValue(undefined);
+      mockClient.initDevices.mockResolvedValue(undefined);
+      mockClient.connect.mockResolvedValue(undefined);
       
       render(<TestComponent props={{ config: configWithAuth }} />);
       
@@ -106,23 +116,20 @@ describe("PipecatVoice", () => {
     });
 
     it("should handle connection success", async () => {
-      let connectedCallback: () => void = () => {};
-      mockClient.on.mockImplementation((event: string, callback: () => void) => {
-        if (event === RTVIEvent.Connected) {
-          connectedCallback = callback;
-        }
+      mockClient.initDevices.mockResolvedValue(undefined);
+      mockClient.connect.mockImplementation(async () => {
+        // Simulate successful connection by calling the onConnected callback
+        setTimeout(() => {
+          if (mockClient._callbacks?.onConnected) {
+            mockClient._callbacks.onConnected();
+          }
+        }, 0);
       });
-      mockClient.startBotAndConnect.mockResolvedValue(undefined);
-      
+
       render(<TestComponent props={{ config }} />);
-      
+
       fireEvent.click(screen.getByTestId("connect"));
-      
-      // Simulate connection success
-      act(() => {
-        connectedCallback();
-      });
-      
+
       await waitFor(() => {
         const stateElement = screen.getByTestId("state");
         const state = JSON.parse(stateElement.textContent || "{}");
@@ -133,23 +140,12 @@ describe("PipecatVoice", () => {
 
     it("should handle connection error", async () => {
       const error = new Error("Connection failed");
-      let errorCallback: (error: Error) => void = () => {};
-      mockClient.on.mockImplementation((event: string, callback: (error: Error) => void) => {
-        if (event === RTVIEvent.Error) {
-          errorCallback = callback;
-        }
-      });
-      mockClient.startBotAndConnect.mockResolvedValue(undefined);
-      
+      mockClient.initDevices.mockRejectedValue(error);
+
       render(<TestComponent props={{ config }} />);
-      
+
       fireEvent.click(screen.getByTestId("connect"));
-      
-      // Simulate connection error
-      act(() => {
-        errorCallback(error);
-      });
-      
+
       await waitFor(() => {
         const stateElement = screen.getByTestId("state");
         const state = JSON.parse(stateElement.textContent || "{}");
@@ -175,7 +171,8 @@ describe("PipecatVoice", () => {
           botStoppedCallback = callback;
         }
       });
-      mockClient.startBotAndConnect.mockResolvedValue(undefined);
+      mockClient.initDevices.mockResolvedValue(undefined);
+      mockClient.connect.mockResolvedValue(undefined);
       
       render(<TestComponent props={{ config }} />);
       
@@ -225,86 +222,80 @@ describe("PipecatVoice", () => {
     });
 
     it("should handle disconnect", async () => {
-      let connectedCallback: () => void = () => {};
-      let disconnectedCallback: () => void = () => {};
-      
-      mockClient.on.mockImplementation((event: string, callback: () => void) => {
-        if (event === RTVIEvent.Connected) {
-          connectedCallback = callback;
-        } else if (event === RTVIEvent.Disconnected) {
-          disconnectedCallback = callback;
-        }
+      mockClient.initDevices.mockResolvedValue(undefined);
+      mockClient.connect.mockImplementation(async () => {
+        setTimeout(() => {
+          if (mockClient._callbacks?.onConnected) {
+            mockClient._callbacks.onConnected();
+          }
+        }, 0);
       });
-      mockClient.startBotAndConnect.mockResolvedValue(undefined);
-      mockClient.disconnect.mockResolvedValue(undefined);
-      
+      mockClient.disconnect.mockImplementation(async () => {
+        setTimeout(() => {
+          if (mockClient._callbacks?.onDisconnected) {
+            mockClient._callbacks.onDisconnected();
+          }
+        }, 0);
+      });
+
       render(<TestComponent props={{ config }} />);
-      
+
       // Connect first
       fireEvent.click(screen.getByTestId("connect"));
-      act(() => {
-        connectedCallback();
-      });
-      
+
       await waitFor(() => {
         const stateElement = screen.getByTestId("state");
         const state = JSON.parse(stateElement.textContent || "{}");
         expect(state.isConnected).toBe(true);
       });
-      
+
       // Then disconnect
       fireEvent.click(screen.getByTestId("disconnect"));
-      act(() => {
-        disconnectedCallback();
-      });
-      
+
       await waitFor(() => {
         const stateElement = screen.getByTestId("state");
         const state = JSON.parse(stateElement.textContent || "{}");
         expect(state.isConnected).toBe(false);
       });
-      
+
       expect(mockClient.disconnect).toHaveBeenCalled();
     });
 
     it("should handle mute toggle", async () => {
-      let connectedCallback: () => void = () => {};
-      
-      mockClient.on.mockImplementation((event: string, callback: () => void) => {
-        if (event === RTVIEvent.Connected) {
-          connectedCallback = callback;
-        }
+      mockClient.initDevices.mockResolvedValue(undefined);
+      mockClient.connect.mockImplementation(async () => {
+        setTimeout(() => {
+          if (mockClient._callbacks?.onConnected) {
+            mockClient._callbacks.onConnected();
+          }
+        }, 0);
       });
-      mockClient.startBotAndConnect.mockResolvedValue(undefined);
       mockClient.enableMic.mockResolvedValue(undefined);
-      
+
       render(<TestComponent props={{ config }} />);
-      
+
       // Connect first
       fireEvent.click(screen.getByTestId("connect"));
-      act(() => {
-        connectedCallback();
-      });
-      
+
       await waitFor(() => {
         const stateElement = screen.getByTestId("state");
         const state = JSON.parse(stateElement.textContent || "{}");
         expect(state.isConnected).toBe(true);
       });
-      
+
       // Toggle mute (should mute)
       fireEvent.click(screen.getByTestId("toggle-mute"));
-      
+
       await waitFor(() => {
         expect(mockClient.enableMic).toHaveBeenCalledWith(false);
         const stateElement = screen.getByTestId("state");
         const state = JSON.parse(stateElement.textContent || "{}");
         expect(state.isMuted).toBe(true);
       });
-      
+
       // Toggle again (should unmute)
       fireEvent.click(screen.getByTestId("toggle-mute"));
-      
+
       await waitFor(() => {
         expect(mockClient.enableMic).toHaveBeenCalledWith(true);
         const stateElement = screen.getByTestId("state");
@@ -326,22 +317,16 @@ describe("PipecatVoice", () => {
       const onConnected = jest.fn();
       const onDisconnected = jest.fn();
       const onError = jest.fn();
-      
-      let connectedCallback: () => void = () => {};
-      let disconnectedCallback: () => void = () => {};
-      let errorCallback: (error: Error) => void = () => {};
-      
-      mockClient.on.mockImplementation((event: string, callback: any) => {
-        if (event === RTVIEvent.Connected) {
-          connectedCallback = callback;
-        } else if (event === RTVIEvent.Disconnected) {
-          disconnectedCallback = callback;
-        } else if (event === RTVIEvent.Error) {
-          errorCallback = callback;
-        }
+
+      mockClient.initDevices.mockResolvedValue(undefined);
+      mockClient.connect.mockImplementation(async () => {
+        setTimeout(() => {
+          if (mockClient._callbacks?.onConnected) {
+            mockClient._callbacks.onConnected();
+          }
+        }, 0);
       });
-      mockClient.startBotAndConnect.mockResolvedValue(undefined);
-      
+
       render(
         <PipecatVoice
           config={config}
@@ -350,23 +335,27 @@ describe("PipecatVoice", () => {
           onError={onError}
         />
       );
-      
+
       fireEvent.click(screen.getByText("Connect Voice"));
-      
-      // Simulate events
-      act(() => {
-        connectedCallback();
+
+      await waitFor(() => {
+        expect(onConnected).toHaveBeenCalled();
       });
-      expect(onConnected).toHaveBeenCalled();
-      
+
+      // Simulate disconnection
       act(() => {
-        disconnectedCallback();
+        if (mockClient._callbacks?.onDisconnected) {
+          mockClient._callbacks.onDisconnected();
+        }
       });
       expect(onDisconnected).toHaveBeenCalled();
-      
+
+      // Simulate error
       const error = new Error("Test error");
       act(() => {
-        errorCallback(error);
+        if (mockClient._callbacks?.onError) {
+          mockClient._callbacks.onError(error);
+        }
       });
       expect(onError).toHaveBeenCalledWith(error);
     });
