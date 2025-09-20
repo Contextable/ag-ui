@@ -83,7 +83,7 @@ class AGUIRunProcessorTests(unittest.TestCase):
             DummyMessage(role="user", content="What is 2+2?", message_id="u1"),
             DummyMessage(role="tool", tool_call_id="t1"),
         ]
-        self.observer.tool_call_metadata["t1"] = {"function_name": "calculate", "arguments": {"value": 4}}
+        self.observer.state.tool_call_metadata["t1"] = {"function_name": "calculate", "arguments": {"value": 4}}
 
         class InputData:
             def __init__(self):

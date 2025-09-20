@@ -414,9 +414,9 @@ class PipecatAGUIBot:
         
         # STEP 1: Detect if the client has reset the conversation.
         incoming_message_count = len(input_data.messages)
-        if incoming_message_count < self.agui_observer.last_message_count:
+        if incoming_message_count < self.agui_observer.state.last_message_count:
             # Client-side reset detected!
-            logger.info(f"Detected client reset: message count decreased from {self.agui_observer.last_message_count} to {incoming_message_count}")
+            logger.info(f"Detected client reset: message count decreased from {self.agui_observer.state.last_message_count} to {incoming_message_count}")
             
             # 1. Perform a full reset of the observer's ID tracking.
             await self.agui_observer.full_reset(accept_header)
@@ -432,7 +432,7 @@ class PipecatAGUIBot:
             await self.agui_observer.reset_for_new_run(accept_header)
         
         # STEP 2: Update the last message count for the next request.
-        self.agui_observer.last_message_count = incoming_message_count
+        self.agui_observer.state.last_message_count = incoming_message_count
         
         # STEP 3: Process the AG-UI input into the pipeline
         await self.process_agui_input(input_data, self.services, self.pipeline_task)

@@ -153,7 +153,7 @@ class TestAGUIObserver:
         mock_task = Mock()
 
         # Set up client tools so the tool call will trigger the client-side path
-        observer.set_client_tools([Mock(name="test_function")])
+        observer.state.set_client_tools([Mock(name="test_function")])
 
         # Start streaming first
         await observer._start_stream()

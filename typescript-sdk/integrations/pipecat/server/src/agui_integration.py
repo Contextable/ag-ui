@@ -27,6 +27,7 @@ class AGUIRunProcessor:
 
     def __init__(self, observer: AGUIObserver, debounce_seconds: float = 2.0):
         self._observer = observer
+        self._state = observer.state
         self._debounce_seconds = debounce_seconds
         self._last_empty_trigger_time = 0.0
 
@@ -60,7 +61,7 @@ class AGUIRunProcessor:
         from pipecat.services.llm_service import FunctionCallParams
 
         for tool in agui_tools:
-            if tool.name in self._observer.current_client_tool_names:
+            if tool.name in self._state.current_client_tool_names:
 
                 async def client_tool_handler(params: FunctionCallParams, *, tool_name=tool.name):
                     logger.info("Acknowledged client-side tool call: '%s'", params.function_name)
@@ -109,7 +110,7 @@ class AGUIRunProcessor:
             tools_frame = LLMSetToolsFrame(tools=tools_schema)
             frames_to_queue.append(tools_frame)
 
-            self._observer.set_client_tools(input_data.tools)
+            self._state.set_client_tools(input_data.tools)
             await self.register_tool_handlers(input_data.tools, services["llm"])
             logger.info("Tool handlers registered and definitions sent to LLM.")
 
@@ -122,9 +123,9 @@ class AGUIRunProcessor:
 
             if (
                 message_id
-                and message_id in self._observer.processed_message_ids
+                and message_id in self._state.processed_message_ids
                 or tool_call_id
-                and tool_call_id in self._observer.processed_tool_result_ids
+                and tool_call_id in self._state.processed_tool_result_ids
             ):
                 logger.info("Found known message/tool_result ID. Stopping history scan.")
                 break
@@ -151,7 +152,7 @@ class AGUIRunProcessor:
     async def _handle_developer_message(self, message: Any, frames_to_queue: List[Any]) -> None:
         content = getattr(message, "content", "")
         if content and content.strip():
-            if message.id in self._observer.processed_message_ids:
+            if message.id in self._state.processed_message_ids:
                 logger.info("[TRIGGER] Developer message already processed, skipping: '%s'", content)
                 return
 
@@ -162,7 +163,7 @@ class AGUIRunProcessor:
                 run_llm=True,
             )
             frames_to_queue.append(system_message_frame)
-            self._observer.processed_message_ids.add(message.id)
+            self._state.processed_message_ids.add(message.id)
             logger.info(
                 "[TRIGGER] Developer message converted to system instruction with LLM trigger: '%s'",
                 content,
@@ -183,7 +184,7 @@ class AGUIRunProcessor:
     async def _append_tool_results(self, tool_results: List[Any], frames_to_queue: List[Any]) -> None:
         for tool_result in reversed(tool_results):
             tool_call_id = getattr(tool_result, "tool_call_id", None)
-            metadata = self._observer.tool_call_metadata.get(tool_call_id)
+            metadata = self._state.tool_call_metadata.get(tool_call_id)
             if not metadata:
                 logger.error("No metadata found for new tool_call_id: %s", tool_call_id)
                 continue
@@ -195,7 +196,7 @@ class AGUIRunProcessor:
                 result=tool_result.content,
             )
             frames_to_queue.append(result_frame)
-            self._observer.processed_tool_result_ids.add(tool_call_id)
+            self._state.processed_tool_result_ids.add(tool_call_id)
             logger.info(
                 "Processed new tool result for %s with ID %s",
                 metadata["function_name"],
@@ -207,7 +208,7 @@ class AGUIRunProcessor:
         logger.info("Injecting newest user message: %s", message.content)
 
         if message_id:
-            self._observer.processed_message_ids.add(message_id)
+            self._state.processed_message_ids.add(message_id)
             logger.info("Tracked message ID: %s", message_id)
 
         from pipecat.frames.frames import LLMMessagesAppendFrame

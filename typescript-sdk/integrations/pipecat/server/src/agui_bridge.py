@@ -56,7 +56,8 @@ import asyncio
 import json
 import logging
 import uuid
-from typing import Any, Optional, AsyncGenerator
+from dataclasses import dataclass, field
+from typing import Any, Optional, AsyncGenerator, Dict, Set
 import time
 
 # Import AG-UI event types from the published library
@@ -73,26 +74,72 @@ from ag_ui.core.events import (
     RunStartedEvent,
     RunFinishedEvent,
     RunErrorEvent,
-    BaseEvent
+    BaseEvent,
 )
 from ag_ui.encoder.encoder import EventEncoder
 
 # Import Pipecat frame types
 from pipecat.frames.frames import (
-    Frame, TextFrame, LLMTextFrame, TranscriptionFrame, InterimTranscriptionFrame,
-    FunctionCallsStartedFrame, FunctionCallInProgressFrame, FunctionCallResultFrame,
-    LLMFullResponseStartFrame, LLMFullResponseEndFrame,
-    TTSSpeakFrame, UserStartedSpeakingFrame, UserStoppedSpeakingFrame,
-    BotStartedSpeakingFrame, BotStoppedSpeakingFrame,
-    StartFrame, EndFrame, CancelFrame, ErrorFrame,
-    LLMMessagesFrame, SystemFrame
+    Frame,
+    TextFrame,
+    LLMTextFrame,
+    FunctionCallsStartedFrame,
+    FunctionCallInProgressFrame,
+    FunctionCallResultFrame,
+    LLMFullResponseStartFrame,
+    LLMFullResponseEndFrame,
+    ErrorFrame,
+    StartFrame,
+    EndFrame,
+    CancelFrame,
+    BotStartedSpeakingFrame,
+    BotStoppedSpeakingFrame,
 )
 from pipecat.pipeline.task import PipelineTask
-from pipecat.processors.frame_processor import FrameDirection
-from pipecat.observers.base_observer import BaseObserver, FrameProcessed
+from pipecat.observers.base_observer import BaseObserver
 
 
 logger = logging.getLogger(__name__)
+
+
+class AGUIObserverState:
+    """Lightweight facade exposing mutable observer state."""
+
+    def __init__(self, observer: "AGUIObserver") -> None:
+        self._observer = observer
+
+    @property
+    def processed_message_ids(self) -> Set[str]:
+        return self._observer._processed_message_ids
+
+    @property
+    def processed_tool_result_ids(self) -> Set[str]:
+        return self._observer._processed_tool_result_ids
+
+    @property
+    def tool_call_metadata(self) -> Dict[str, Dict[str, Any]]:
+        return self._observer._tool_call_metadata
+
+    @property
+    def current_client_tool_names(self) -> Set[str]:
+        return self._observer._current_client_tool_names
+
+    @property
+    def last_message_count(self) -> int:
+        return self._observer._last_message_count
+
+    @last_message_count.setter
+    def last_message_count(self, value: int) -> None:
+        self._observer._last_message_count = value
+
+    def set_client_tools(self, client_tools: list) -> None:
+        if client_tools:
+            names = {tool.name for tool in client_tools}
+            self._observer._current_client_tool_names = names
+            logger.info("Updated client tools: %s", names)
+        else:
+            self._observer._current_client_tool_names = set()
+            logger.info("Cleared client tools")
 
 
 class AGUIObserver(BaseObserver):
@@ -143,17 +190,20 @@ class AGUIObserver(BaseObserver):
         self.run_finished = False  # Track if we've already sent RUN_FINISHED for current message
         
         # Message and tool result tracking to prevent duplicates
-        self.processed_message_ids = set()  # Track processed message IDs
-        self.processed_tool_result_ids = set()  # Track processed tool result IDs
+        self._processed_message_ids = set()  # Track processed message IDs
+        self._processed_tool_result_ids = set()  # Track processed tool result IDs
         
         # Tool call metadata storage for FunctionCallResultFrame construction
-        self.tool_call_metadata = {}  # Map tool_call_id -> {function_name, arguments}
+        self._tool_call_metadata = {}  # Map tool_call_id -> {function_name, arguments}
         
         # Client-side tools for current run (updated dynamically)
-        self.current_client_tool_names = set()
+        self._current_client_tool_names = set()
         
         # Message count tracking for detecting client resets
-        self.last_message_count = 0
+        self._last_message_count = 0
+        
+        # Public state facade for processors
+        self.state = AGUIObserverState(self)
         
         self._log(f"Initialized AG-UI Observer - Run ID: {self.run_id}, Max Memory: {max_memory_mb}MB")
     
@@ -164,15 +214,6 @@ class AGUIObserver(BaseObserver):
     async def on_task_ended(self, task: PipelineTask):
         """Called when pipeline task ends"""
         await self._end_stream()
-    
-    def set_client_tools(self, client_tools: list):
-        """Update the list of client-side tools for the current run"""
-        if client_tools:
-            self.current_client_tool_names = {tool.name for tool in client_tools}
-            logger.info(f"Updated client tools: {self.current_client_tool_names}")
-        else:
-            self.current_client_tool_names = set()
-            logger.info("Cleared client tools")
     
     async def on_push_frame(self, data):
         """Called when a frame is pushed through the pipeline (Pipecat 0.0.83+ method)"""
@@ -185,15 +226,63 @@ class AGUIObserver(BaseObserver):
         logger.debug(f"[FRAME_DEBUG] Received frame: {type(frame).__name__}")
 
         try:
-            # Handle system frames
-            if isinstance(frame, StartFrame):
+            # Handle downstream LLM/text frames before generic start/end frames
+            if isinstance(frame, LLMFullResponseStartFrame):
+                logger.info("[LLM_OUTPUT] LLM started generating response")
+                await self._start_text_message("assistant")
+
+            elif isinstance(frame, LLMTextFrame):
+                if frame.text not in self.processed_text_chunks:
+                    self.processed_text_chunks.add(frame.text)
+                    logger.info("[LLM_OUTPUT] LLM generated text chunk (LLMTextFrame): '%s'", frame.text)
+                    await self._add_text_content(frame.text)
+                else:
+                    logger.debug("[LLM_OUTPUT] Skipping duplicate LLMTextFrame: '%s'", frame.text)
+
+            elif isinstance(frame, LLMFullResponseEndFrame):
+                logger.info("[LLM_OUTPUT] LLM finished generating response")
+                await self._end_current_message()
+
+                if self._run_finished_sent:
+                    logger.info("[LLM_OUTPUT] LLM response completed, RUN_FINISHED already sent for client tools - closing stream without duplicate message")
+                    self.run_finished = True
+                    await self._close_stream()
+                elif self.pending_tool_calls == 0 and not self._has_had_tool_calls:
+                    logger.info("[LLM_OUTPUT] Simple text response completed - finishing run")
+                    await self._finish_run({"status": "completed", "type": "simple_response"})
+                elif self.pending_tool_calls == 0 and self._has_had_tool_calls:
+                    logger.info("[TOOL_FLOW] Final LLM response after server tool calls completed - finishing run")
+                    await self._finish_run({"status": "completed", "type": "final_llm_response"})
+                else:
+                    logger.info("[LLM_OUTPUT] LLM response completed with %s tool calls pending", self.pending_tool_calls)
+
+            elif isinstance(frame, FunctionCallsStartedFrame):
+                await self._handle_function_calls_started(frame)
+
+            elif isinstance(frame, FunctionCallInProgressFrame):
+                logger.info(
+                    "[TOOL_FLOW] Tool call in progress: %s (ID: %s) - ignoring for AG-UI events",
+                    frame.function_name,
+                    frame.tool_call_id,
+                )
+
+            elif isinstance(frame, FunctionCallResultFrame):
+                await self._handle_function_result_frame(frame)
+
+            elif isinstance(frame, TextFrame):
+                logger.info("[SKIP] Ignoring non-LLM TextFrame: '%s'", frame.text)
+
+            # Handle system frames last so specific subclasses above take precedence
+            elif isinstance(frame, StartFrame):
                 self._log("Pipeline started, but not auto-starting AG-UI stream")
+
             elif isinstance(frame, (EndFrame, CancelFrame)):
                 if not self.run_finished:
-                    logger.info(f"Pipeline task ended ({type(frame).__name__}). Finishing run.")
+                    logger.info("Pipeline task ended (%s). Finishing run.", type(frame).__name__)
                     await self._finish_run({"status": "completed", "type": "pipeline_ended"})
                 else:
-                    logger.info(f"Pipeline task ended ({type(frame).__name__}), but run was already finished. No action needed.")
+                    logger.info("Pipeline task ended (%s), but run was already finished. No action needed.", type(frame).__name__)
+
             elif isinstance(frame, ErrorFrame):
                 await self._handle_error(frame)
 
@@ -203,135 +292,6 @@ class AGUIObserver(BaseObserver):
             #     await self._handle_user_transcription(frame, final=True)
             # elif isinstance(frame, InterimTranscriptionFrame):
             #     await self._handle_user_transcription(frame, final=False)
-
-            # Handle assistant frames (DOWNSTREAM)
-            elif isinstance(frame, LLMFullResponseStartFrame):
-                logger.info(f"[LLM_OUTPUT] LLM started generating response")
-                await self._start_text_message("assistant")
-            
-            elif isinstance(frame, LLMTextFrame):
-                # Deduplicate LLMTextFrame chunks that may flow through pipeline multiple times
-                if frame.text not in self.processed_text_chunks:
-                    self.processed_text_chunks.add(frame.text)
-                    logger.info(f"[LLM_OUTPUT] LLM generated text chunk (LLMTextFrame): '{frame.text}'")
-                    await self._add_text_content(frame.text)
-                else:
-                    logger.debug(f"[LLM_OUTPUT] Skipping duplicate LLMTextFrame: '{frame.text}'")
-
-            elif isinstance(frame, LLMFullResponseEndFrame):
-                logger.info(f"[LLM_OUTPUT] LLM finished generating response")
-                await self._end_current_message()
-
-                # Check what type of response this was and handle accordingly
-                if self._run_finished_sent:
-                    # RUN_FINISHED already sent for client-side tools, but still need to close stream
-                    logger.info(f"[LLM_OUTPUT] LLM response completed, RUN_FINISHED already sent for client tools - closing stream without duplicate message")
-                    self.run_finished = True  # Mark as finished to prevent other issues
-                    await self._close_stream()
-                elif self.pending_tool_calls == 0 and not self._has_had_tool_calls:
-                    # Simple text response with no tool calls - do soft finish
-                    logger.info(f"[LLM_OUTPUT] Simple text response completed - finishing run")
-                    await self._finish_run({"status": "completed", "type": "simple_response"})
-                elif self.pending_tool_calls == 0 and self._has_had_tool_calls:
-                    # Final response AFTER SERVER-SIDE tools have executed
-                    logger.info(f"[TOOL_FLOW] Final LLM response after server tool calls completed - finishing run")
-                    await self._finish_run({"status": "completed", "type": "final_llm_response"})
-                else:
-                    # Tool calls are pending (either client or server)
-                    # For client-side tools, the soft finish has already been sent
-                    # For server-side tools, we wait for them to complete
-                    logger.info(f"[LLM_OUTPUT] LLM response completed with {self.pending_tool_calls} tool calls pending")
-
-            elif isinstance(frame, TextFrame):
-                # Skip regular TextFrame - we only want LLM-generated text
-                logger.info(f"[SKIP] Ignoring non-LLM TextFrame: '{frame.text}'")
-
-            # Handle tool call frames
-            elif isinstance(frame, FunctionCallsStartedFrame):
-                logger.info(f"[TOOL_FLOW] FunctionCallsStartedFrame detected: {len(frame.function_calls)} calls")
-                
-                client_tool_calls = []
-                server_tool_calls = []
-                
-                # Separate client-side vs server-side tool calls
-                for func_call in frame.function_calls:
-                    tool_call_id = getattr(func_call, "tool_call_id", None)
-                    function_name = getattr(func_call, "function_name", None)
-                    
-                    if tool_call_id and function_name:
-                        # Check for duplicates
-                        if tool_call_id in self._processed_tool_call_ids:
-                            logger.warning(f"[TOOL_FLOW] Skipping duplicate tool call ID: {tool_call_id}")
-                            continue
-                        
-                        self._processed_tool_call_ids.add(tool_call_id)
-                        
-                        # Store tool call metadata for FunctionCallResultFrame construction
-                        arguments = getattr(func_call, "arguments", {})
-                        self.tool_call_metadata[tool_call_id] = {
-                            "function_name": function_name,
-                            "arguments": arguments
-                        }
-                        logger.debug(f"[TOOL_METADATA] Stored metadata for {tool_call_id}: {function_name} with args {arguments}")
-                        
-                        # Check if this is a client-side tool
-                        if function_name in self.current_client_tool_names:
-                            logger.info(f"[TOOL_FLOW] Tool '{function_name}' is CLIENT-SIDE: {tool_call_id}")
-                            client_tool_calls.append(func_call)
-                        else:
-                            logger.info(f"[TOOL_FLOW] Tool '{function_name}' is SERVER-SIDE: {tool_call_id}")
-                            server_tool_calls.append(func_call)
-                
-                # Process client-side tools: send to client and soft finish
-                if client_tool_calls:
-                    # Mark that we've had tool calls to prevent premature stream closure
-                    self._has_had_tool_calls = True
-                    await self._end_current_message()
-                    
-                    for func_call in client_tool_calls:
-                        tool_call_id = getattr(func_call, "tool_call_id", None)
-                        function_name = getattr(func_call, "function_name", None)
-                        args = getattr(func_call, "arguments", None)
-                        
-                        await self._handle_tool_call_start(tool_call_id, function_name)
-                        if args:
-                            await self._handle_tool_call_args(tool_call_id, args)
-                        await self._handle_tool_call_end(tool_call_id)
-                        
-                        logger.info(f"[TOOL_FLOW] Client tool call {tool_call_id} sent to client for processing")
-                    
-                    # Use "soft finish" to signal client to execute tools while keeping pipeline active
-                    await self._send_run_finished_event({"status": "awaiting_tool_results", "type": "tool_calls_sent"})
-                    self._run_finished_sent = True  # Mark that we've sent RUN_FINISHED for this run
-                
-                # Process server-side tools: track for state management
-                if server_tool_calls:
-                    logger.info(f"[TOOL_FLOW] {len(server_tool_calls)} server-side tool calls will execute on server")
-                    for func_call in server_tool_calls:
-                        tool_call_id = getattr(func_call, "tool_call_id", None)
-                        function_name = getattr(func_call, "function_name", None)
-                        if tool_call_id and function_name:
-                            self.pending_tool_calls += 1
-                            self._has_had_tool_calls = True
-                            logger.info(f"[TOOL_FLOW] Processing server tool call: {function_name} (ID: {tool_call_id}), pending={self.pending_tool_calls}")
-                            await self._handle_tool_call_start(tool_call_id, function_name)
-
-            elif isinstance(frame, FunctionCallInProgressFrame):
-                # Log for debugging but don't generate AG-UI events
-                logger.info(f"[TOOL_FLOW] Tool call in progress: {frame.function_name} (ID: {frame.tool_call_id}) - ignoring for AG-UI events")
-                
-            elif isinstance(frame, FunctionCallResultFrame):
-                # Handle server-side tool call results
-                result_key = f"{frame.tool_call_id}_result"
-                if result_key not in self._processed_tool_call_ids:
-                    self._processed_tool_call_ids.add(result_key)
-                    self.pending_tool_calls = max(0, self.pending_tool_calls - 1)
-                    logger.info(f"[TOOL_FLOW] Tool call result received, pending_tool_calls={self.pending_tool_calls}")
-                    await self._handle_tool_call_result(frame.tool_call_id, frame.result)
-                    logger.info(f"[TOOL_CALL] Tool call completed, but not finishing run - waiting for final LLM response")
-                else:
-                    logger.info(f"[TOOL_FLOW] Skipping duplicate tool call result: {frame.tool_call_id}")
-
             elif isinstance(frame, BotStartedSpeakingFrame):
                 # Skip - real-time audio feedback that loses meaning if deferred
                 pass
@@ -428,10 +388,10 @@ class AGUIObserver(BaseObserver):
         self._log("!!! Performing full state reset due to client reset detection !!!")
         
         # Clear ALL persistent state
-        self.processed_message_ids.clear()
-        self.processed_tool_result_ids.clear()
-        self.tool_call_metadata.clear()
-        self.last_message_count = 0
+        self._processed_message_ids.clear()
+        self._processed_tool_result_ids.clear()
+        self._tool_call_metadata.clear()
+        self._last_message_count = 0
         
         # Then do the normal reset
         await self.reset_for_new_run(accept_header)
@@ -519,6 +479,8 @@ class AGUIObserver(BaseObserver):
             timestamp=self._get_timestamp()
         )
         await self._send_agui_event(event)
+        # Treat explicit error frames as handled; don't accumulate error count
+        self.error_count = 0
     
     async def _handle_frame_error(self, error: Exception, frame: Frame):
         """Handle errors that occur during frame processing"""
@@ -739,7 +701,91 @@ class AGUIObserver(BaseObserver):
         
         # Clear deferred events
         self.deferred_events.clear()
-    
+
+    async def _handle_function_calls_started(self, frame: FunctionCallsStartedFrame) -> None:
+        logger.info("[TOOL_FLOW] FunctionCallsStartedFrame detected: %s calls", len(frame.function_calls))
+
+        client_tool_calls = []
+        server_tool_calls = []
+
+        for func_call in frame.function_calls:
+            tool_call_id = getattr(func_call, "tool_call_id", None)
+            function_name = getattr(func_call, "function_name", None)
+
+            if not (tool_call_id and function_name):
+                continue
+
+            if tool_call_id in self._processed_tool_call_ids:
+                logger.warning("[TOOL_FLOW] Skipping duplicate tool call ID: %s", tool_call_id)
+                continue
+
+            self._processed_tool_call_ids.add(tool_call_id)
+
+            arguments = getattr(func_call, "arguments", {})
+            self._tool_call_metadata[tool_call_id] = {
+                "function_name": function_name,
+                "arguments": arguments,
+            }
+            logger.debug(
+                "[TOOL_METADATA] Stored metadata for %s: %s with args %s",
+                tool_call_id,
+                function_name,
+                arguments,
+            )
+
+            if function_name in self._current_client_tool_names:
+                logger.info("[TOOL_FLOW] Tool '%s' is CLIENT-SIDE: %s", function_name, tool_call_id)
+                client_tool_calls.append(func_call)
+            else:
+                logger.info("[TOOL_FLOW] Tool '%s' is SERVER-SIDE: %s", function_name, tool_call_id)
+                server_tool_calls.append(func_call)
+
+        if client_tool_calls:
+            self._has_had_tool_calls = True
+            await self._end_current_message()
+
+            for func_call in client_tool_calls:
+                tool_call_id = getattr(func_call, "tool_call_id", None)
+                function_name = getattr(func_call, "function_name", None)
+                args = getattr(func_call, "arguments", None)
+
+                await self._handle_tool_call_start(tool_call_id, function_name)
+                if args:
+                    await self._handle_tool_call_args(tool_call_id, args)
+                await self._handle_tool_call_end(tool_call_id)
+                logger.info("[TOOL_FLOW] Client tool call %s sent to client for processing", tool_call_id)
+
+            await self._send_run_finished_event({"status": "awaiting_tool_results", "type": "tool_calls_sent"})
+            self._run_finished_sent = True
+
+        if server_tool_calls:
+            logger.info("[TOOL_FLOW] %s server-side tool calls will execute on server", len(server_tool_calls))
+            for func_call in server_tool_calls:
+                tool_call_id = getattr(func_call, "tool_call_id", None)
+                function_name = getattr(func_call, "function_name", None)
+                if tool_call_id and function_name:
+                    self.pending_tool_calls += 1
+                    self._has_had_tool_calls = True
+                    logger.info(
+                        "[TOOL_FLOW] Processing server tool call: %s (ID: %s), pending=%s",
+                        function_name,
+                        tool_call_id,
+                        self.pending_tool_calls,
+                    )
+                    await self._handle_tool_call_start(tool_call_id, function_name)
+
+    async def _handle_function_result_frame(self, frame: FunctionCallResultFrame) -> None:
+        result_key = f"{frame.tool_call_id}_result"
+        if result_key in self._processed_tool_call_ids:
+            logger.info("[TOOL_FLOW] Skipping duplicate tool call result: %s", frame.tool_call_id)
+            return
+
+        self._processed_tool_call_ids.add(result_key)
+        self.pending_tool_calls = max(0, self.pending_tool_calls - 1)
+        logger.info("[TOOL_FLOW] Tool call result received, pending_tool_calls=%s", self.pending_tool_calls)
+        await self._handle_tool_call_result(frame.tool_call_id, frame.result)
+        logger.info("[TOOL_CALL] Tool call completed, but not finishing run - waiting for final LLM response")
+
     async def _send_agui_event(self, event: BaseEvent):
         """Send AG-UI event to SSE stream with memory monitoring"""
         try:
