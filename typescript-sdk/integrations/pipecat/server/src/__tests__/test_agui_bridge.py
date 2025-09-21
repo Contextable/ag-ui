@@ -7,6 +7,7 @@ This module tests the AGUIObserver class and its integration with Pipecat pipeli
 import asyncio
 import json
 import logging
+from contextlib import suppress
 import pytest
 from unittest.mock import Mock, AsyncMock, patch
 from typing import List, Any
@@ -304,8 +305,16 @@ class TestAGUIObserver:
         # Start streaming but don't send events
         await observer._start_stream()
         
-        # Mock asyncio.wait_for to raise TimeoutError
-        with patch('asyncio.wait_for', side_effect=asyncio.TimeoutError):
+        # Mock asyncio.wait_for to raise TimeoutError while cancelling the queued awaitable cleanly
+        async def timeout_wait_for(awaitable, timeout):
+            task = asyncio.create_task(awaitable)
+            await asyncio.sleep(0)
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+            raise asyncio.TimeoutError
+
+        with patch('asyncio.wait_for', new=timeout_wait_for):
             # Get one event from stream (should be heartbeat)
             async for event in observer.get_sse_stream():
                 assert "heartbeat" in event
