@@ -61,40 +61,52 @@ class AGUIRunProcessor:
         from pipecat.services.llm_service import FunctionCallParams
 
         for tool in agui_tools:
-            if tool.name in self._state.current_client_tool_names:
+            tool_name = tool.name
 
-                async def client_tool_handler(params: FunctionCallParams, *, tool_name=tool.name):
-                    logger.info("Acknowledged client-side tool call: '%s'", params.function_name)
-                    return {
-                        "status": "success",
-                        "message": f"Client-side tool '{tool_name}' acknowledged.",
-                    }
+            if tool_name in self._state.current_client_tool_names:
 
-                llm_service.register_function(tool.name, client_tool_handler)
-                logger.info("Registered placeholder handler for client-side tool: '%s'", tool.name)
+                def client_tool_handler_factory(name: str):
+
+                    async def client_tool_handler(params: FunctionCallParams) -> None:
+                        logger.info("Acknowledged client-side tool call: '%s'", params.function_name)
+                        if params.result_callback:
+                            await params.result_callback(
+                                {
+                                    "status": "success",
+                                    "message": f"Client-side tool '{name}' acknowledged.",
+                                }
+                            )
+
+                    return client_tool_handler
+
+                llm_service.register_function(tool_name, client_tool_handler_factory(tool_name))
+                logger.info("Registered placeholder handler for client-side tool: '%s'", tool_name)
+
             else:
 
-                async def tool_handler(params: FunctionCallParams, *, tool_name=tool.name):
-                    logger.info(
-                        "Tool '%s' called with args: %s", params.function_name, params.arguments
-                    )
-                    logger.info("Tool call ID: %s", params.tool_call_id)
+                def tool_handler_factory(name: str):
 
-                    result = {
-                        "status": "success",
-                        "message": f"Tool '{tool_name}' executed with args: {params.arguments}",
-                        "result": "Tool execution placeholder - integrate with AG-UI tool system",
-                    }
+                    async def tool_handler(params: FunctionCallParams) -> None:
+                        logger.info(
+                            "Tool '%s' called with args: %s", params.function_name, params.arguments
+                        )
+                        logger.info("Tool call ID: %s", params.tool_call_id)
 
-                    logger.info("Tool '%s' completed with result: %s", tool_name, result)
+                        result = {
+                            "status": "success",
+                            "message": f"Tool '{name}' executed with args: {params.arguments}",
+                            "result": "Tool execution placeholder - integrate with AG-UI tool system",
+                        }
 
-                    if params.result_callback:
-                        await params.result_callback(result)
+                        logger.info("Tool '%s' completed with result: %s", name, result)
 
-                    return result
+                        if params.result_callback:
+                            await params.result_callback(result)
 
-                llm_service.register_function(tool.name, tool_handler)
-                logger.info("Registered handler for server-side tool '%s'", tool.name)
+                    return tool_handler
+
+                llm_service.register_function(tool_name, tool_handler_factory(tool_name))
+                logger.info("Registered handler for server-side tool '%s'", tool_name)
 
     # ------------------------------------------------------------------
     # Run processing

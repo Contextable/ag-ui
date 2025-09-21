@@ -202,6 +202,12 @@ class PipecatAGUIBot:
         
         # Create WebSocket connection filter to prevent TTS when disconnected
         async def not_tts_frame(frame: Frame) -> bool:
+            """Filter out frames that shouldn't reach downstream audio transport."""
+            if isinstance(frame, StartInterruptionFrame):
+                # StartInterruptionFrame is a control message and lacks protobuf serialization support
+                logger.debug("[FILTER] Dropping StartInterruptionFrame before transport output")
+                return False
+
             tts_types = (TTSSpeakFrame, TTSAudioRawFrame, TTSTextFrame)
             return self.tts_on or not isinstance(frame, tts_types)
         
