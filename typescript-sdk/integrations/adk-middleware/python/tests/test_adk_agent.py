@@ -7,9 +7,9 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import Mock, MagicMock, AsyncMock, patch
 
-
 from ag_ui_adk import ADKAgent, SessionManager
 from ag_ui_adk.event_translator import EventTranslator
+
 from ag_ui.core import (
     RunAgentInput, EventType, UserMessage, Context,
     RunStartedEvent, RunFinishedEvent, TextMessageChunkEvent, SystemMessage,
@@ -168,6 +168,95 @@ class TestADKAgent:
             author="assistant",
             content=SimpleNamespace(parts=[function_part]),
             partial=False,
+    async def test_turn_complete_falls_back_to_streaming_translator(
+        self,
+        adk_agent,
+        sample_input,
+    ):
+        """Ensure turn_complete=False triggers streaming translation path."""
+
+        streaming_calls = []
+        lro_calls = []
+
+        async def fake_translate(self, adk_event, thread_id, run_id):
+            streaming_calls.append((adk_event, thread_id, run_id))
+            yield TextMessageChunkEvent(
+                message_id=adk_event.id,
+                role="assistant",
+                delta="streamed chunk",
+            )
+
+        async def fake_translate_lro(self, adk_event):
+            lro_calls.append(adk_event)
+            if False:  # pragma: no cover - required to keep async generator signature
+                yield None
+
+        mock_event = Mock()
+        mock_event.id = "event_stream"
+        mock_event.author = "assistant"
+        mock_event.partial = False
+        mock_event.turn_complete = False
+        mock_event.finish_reason = "STOP"
+        mock_event.usage_metadata = {"tokens": 5}
+        mock_event.is_final_response = Mock(return_value=True)
+        mock_event.content = Mock()
+        mock_event.content.parts = [Mock(text="Final response chunk")]
+        mock_event.actions = None
+        mock_event.get_function_calls = Mock(return_value=[])
+        mock_event.get_function_responses = Mock(return_value=[])
+        mock_event.custom_data = None
+
+        class DummyRunner:
+            async def run_async(self, *args, **kwargs):
+                yield mock_event
+
+        with patch.object(adk_agent, '_create_runner', return_value=DummyRunner()), \
+             patch.object(EventTranslator, 'translate', new=fake_translate), \
+             patch.object(EventTranslator, 'translate_lro_function_calls', new=fake_translate_lro):
+
+            events = []
+            async for event in adk_agent.run(sample_input):
+                events.append(event)
+
+        # Verify run lifecycle events emitted
+        assert events[0].type == EventType.RUN_STARTED
+        assert events[-1].type == EventType.RUN_FINISHED
+
+        # Ensure streaming translator branch handled the event
+        chunk_events = [event for event in events if isinstance(event, TextMessageChunkEvent)]
+        assert chunk_events, "Expected translated chunk event"
+        assert chunk_events[0].delta == "streamed chunk"
+
+        # Confirm branch selection
+        assert len(streaming_calls) == 1
+        assert lro_calls == []
+        
+    async def test_partial_final_chunk_uses_streaming_translation(self, adk_agent, sample_input):
+        """Ensure partial chunks marked as final still use streaming translation."""
+
+        translate_calls = 0
+        lro_calls = 0
+
+        async def fake_translate(self, adk_event, thread_id, run_id):
+            nonlocal translate_calls
+            translate_calls += 1
+            yield TextMessageChunkEvent(
+                type=EventType.TEXT_MESSAGE_CHUNK,
+                message_id=adk_event.id,
+                delta="chunk"
+            )
+
+        async def fake_translate_lro(self, adk_event):
+            nonlocal lro_calls
+            lro_calls += 1
+            if False:
+                yield  # pragma: no cover - keeps this an async generator
+
+        adk_event = SimpleNamespace(
+            id="event-final-chunk",
+            author="assistant",
+            content=SimpleNamespace(parts=[SimpleNamespace(text="hello")]),
+            partial=True,
             turn_complete=True,
             usage_metadata={"tokens": 1},
             finish_reason="STOP",
@@ -237,6 +326,23 @@ class TestADKAgent:
 
         # Ensure we produced a tool call event to guard against regressions
         assert any(event.type == EventType.TOOL_CALL_END for event in captured_lro_events)
+            get_function_calls=lambda: [],
+            get_function_responses=lambda: [],
+            is_final_response=lambda: True
+        )
+
+        class FakeRunner:
+            async def run_async(self, *args, **kwargs):
+                yield adk_event
+
+        with patch("ag_ui_adk.adk_agent.EventTranslator.translate", new=fake_translate), \
+             patch("ag_ui_adk.adk_agent.EventTranslator.translate_lro_function_calls", new=fake_translate_lro), \
+             patch.object(adk_agent, "_create_runner", return_value=FakeRunner()):
+            events = [event async for event in adk_agent.run(sample_input)]
+
+        assert any(isinstance(event, TextMessageChunkEvent) for event in events)
+        assert translate_calls == 1
+        assert lro_calls == 0
 
     @pytest.mark.asyncio
     async def test_session_management(self, adk_agent):
