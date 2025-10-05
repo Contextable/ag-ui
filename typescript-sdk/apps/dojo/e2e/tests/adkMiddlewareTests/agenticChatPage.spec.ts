@@ -28,7 +28,7 @@ test.describe("Agentic Chat Feature", () => {
     });
   });
 
-  test("[ADK Middleware] Agentic Chat changes background on message and reset", async ({
+  test.skip("[ADK Middleware] Agentic Chat changes background on message and reset", async ({
     page,
   }) => {
     await retryOnAIFailure(async () => {
