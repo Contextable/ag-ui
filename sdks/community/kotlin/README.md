@@ -1,3 +1,5 @@
+**Note: This SDK has now been merged to the main repo. This fork will no longer be maintained and has been archived.**
+
 # AG-UI Kotlin SDK
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
