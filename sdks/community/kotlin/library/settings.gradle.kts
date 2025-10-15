@@ -22,9 +22,11 @@ enableFeaturePreview("TYPESAFE_PROJECT_ACCESSORS")
 include(":kotlin-core")
 include(":kotlin-client")
 include(":kotlin-tools")
+include(":kotlin-server")
 
 // Map module directories to artifact names
 project(":kotlin-core").projectDir = file("core")
 project(":kotlin-client").projectDir = file("client")
 project(":kotlin-tools").projectDir = file("tools")
+project(":kotlin-server").projectDir = file("server")
 

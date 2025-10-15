@@ -35,7 +35,7 @@ dependencies {
 
 ## Architecture
 
-The SDK follows a modular architecture with three main components:
+The SDK follows a modular architecture with four main components:
 
 ### kotlin-client
 High-level agent implementations and client infrastructure.
@@ -61,6 +61,14 @@ Tool execution framework for extending agent capabilities.
 - **ToolExecutionManager**: Tool execution with circuit breaker patterns
 
 [Learn more about the Tools module →](/docs/sdk/kotlin/tools/overview)
+
+### kotlin-server
+Utilities for exposing AG-UI compliant HTTP endpoints from Kotlin servers.
+- **aguiSseAgent**: Installs an SSE endpoint that streams `BaseEvent` flows
+- **SseEventEncoder**: Formats events so AG-UI clients can consume them
+- **RunError handling**: Automatically surfaces server failures as structured events
+
+[Learn more about the Server module →](/docs/sdk/kotlin/server/overview)
 
 ## Supported Platforms
 
