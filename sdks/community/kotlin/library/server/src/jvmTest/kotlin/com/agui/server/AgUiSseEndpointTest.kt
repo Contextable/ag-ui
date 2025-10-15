@@ -19,7 +19,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
-class AguiSseEndpointTest {
+class AgUiSseEndpointTest {
     @Test
     fun `streams events to HttpAgent`() = runTest {
         testApplication {
