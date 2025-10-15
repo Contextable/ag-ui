@@ -15,7 +15,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collect
 import kotlinx.serialization.json.Json
 
-private val logger = Logger.withTag("AguiSseEndpoint")
+private val logger = Logger.withTag("AgUiSseEndpoint")
 
 /**
  * Installs an AG-UI compliant SSE endpoint on the provided [Route].
