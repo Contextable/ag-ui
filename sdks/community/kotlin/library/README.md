@@ -18,7 +18,7 @@ This directory contains the main AG-UI Kotlin SDK library source code and build 
 - `kotlin-core` – Protocol types, events, and shared serialization
 - `kotlin-client` – HTTP transport, state management, and agent wrappers
 - `kotlin-tools` – Tool registry, execution pipeline, and client-side adapters
-- `kotlin-server` – Utilities for hosting AG-UI compliant SSE endpoints
+- `kotlin-server` – Utilities for hosting AG-UI compliant HTTP streaming endpoints
 
 ## Building
 

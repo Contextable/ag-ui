@@ -75,7 +75,7 @@ dependencies {
     implementation 'com.google.android.material:material:1.12.0'
     
     // JSON handling 
-    implementation 'org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1'
+    implementation 'org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0'
     
     // Logging - using library's logback-android implementation
     

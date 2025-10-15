@@ -1,23 +1,25 @@
 package com.agui.client.agent
 
-import com.agui.client.sse.SseParser
+import co.touchlab.kermit.Logger
+import com.agui.client.transport.NdjsonEventParser
 import com.agui.core.types.*
 import io.ktor.client.*
 import io.ktor.client.plugins.*
-import io.ktor.client.plugins.contentnegotiation.*
-import io.ktor.client.plugins.sse.*
 import io.ktor.client.request.*
+import io.ktor.client.statement.*
 import io.ktor.http.*
-import io.ktor.serialization.kotlinx.json.*
-import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.*
-import co.touchlab.kermit.Logger
+import io.ktor.utils.io.ByteReadChannel
+import io.ktor.utils.io.cancel
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.channelFlow
 
 private val logger = Logger.withTag("HttpAgent")
 
 /**
  * HTTP-based agent implementation using Ktor client.
- * Extends AbstractAgent to provide HTTP/SSE transport.
+ * Extends [AbstractAgent] to provide newline-delimited JSON streaming
+ * compatible with the CopilotKit/AG-UI protocol.
  */
 class HttpAgent(
     private val config: HttpAgentConfig,
@@ -25,64 +27,68 @@ class HttpAgent(
 ) : AbstractAgent(config) {
     
     private val client: HttpClient
-    private val sseParser = SseParser()
+    private val parser = NdjsonEventParser()
     
     init {
         client = httpClient ?: createPlatformHttpClient(config.requestTimeout, config.connectTimeout)
     }
     
-    /**
-     * Implementation of abstract run method using HTTP/SSE transport.
-     * Makes an HTTP POST request to the configured URL and processes the SSE response stream.
-     * 
-     * @param input The complete input for the agent run including thread ID, run ID, tools, and context
-     * @return Flow<BaseEvent> stream of events received from the agent endpoint
-     * @throws CancellationException if the operation is cancelled
-     * @throws Exception for network or parsing errors
-     */
     override fun run(input: RunAgentInput): Flow<BaseEvent> = channelFlow {
         try {
-            client.sse(
-                urlString = config.url,
-                request = {
-                    method = HttpMethod.Post
-                    config.headers.forEach { (key, value) ->
-                        header(key, value)
-                    }
-                    contentType(ContentType.Application.Json)
-                    accept(ContentType.Text.EventStream)
-                    setBody(input)
+            val response = client.post(config.url) {
+                method = HttpMethod.Post
+                config.headers.forEach { (key, value) ->
+                    header(key, value)
                 }
-            ) {
-                // Convert SSE events to string flow
-                val stringFlow = incoming.mapNotNull { sseEvent ->
-                    logger.d { "Raw SSE event: ${sseEvent}" }
-                    sseEvent.data?.also { data ->
-                        logger.d { "SSE data: $data" }
-                    }
+                contentType(ContentType.Application.Json)
+                accept(ContentType.Application.Json)
+                setBody(input)
+            }
+
+            if (!response.status.isSuccess()) {
+                val statusMessage = "HTTP ${response.status.value} ${response.status.description}"
+                val errorBody = runCatching { response.bodyAsText() }.getOrNull()
+                val message = when {
+                    errorBody.isNullOrBlank() -> statusMessage
+                    else -> "$statusMessage: $errorBody"
                 }
-                
-                // Parse SSE stream
-                sseParser.parseFlow(stringFlow)
-                    .collect { event ->
-                        logger.d { "Parsed event: ${event.eventType}" }
-                        send(event)
-                    }
+                send(
+                    RunErrorEvent(
+                        message = message,
+                        code = "TRANSPORT_ERROR"
+                    )
+                )
+                return@channelFlow
+            }
+
+            val channel: ByteReadChannel = response.bodyAsChannel()
+            try {
+                parser.parse(channel) { event ->
+                    logger.d { "Parsed event: ${event.eventType}" }
+                    send(event)
+                }
+            } finally {
+                channel.cancel()
             }
         } catch (e: CancellationException) {
             logger.d { "Agent run cancelled" }
             throw e
+        } catch (e: HttpRequestTimeoutException) {
+            logger.e(e) { "Agent run timed out" }
+            send(
+                RunErrorEvent(
+                    message = e.message ?: "Request timed out",
+                    code = "TIMEOUT_ERROR"
+                )
+            )
         } catch (e: Exception) {
             logger.e(e) { "Agent run failed: ${e.message}" }
-            
-            // Emit error event
-            send(RunErrorEvent(
-                message = e.message ?: "Unknown error",
-                code = when (e) {
-                    is HttpRequestTimeoutException -> "TIMEOUT_ERROR"
-                    else -> "TRANSPORT_ERROR"
-                }
-            ))
+            send(
+                RunErrorEvent(
+                    message = e.message ?: "Unknown error",
+                    code = "TRANSPORT_ERROR"
+                )
+            )
         }
     }
     

@@ -1,6 +1,6 @@
 ---
 title: Kotlin Server Module
-description: Host AG-UI compliant SSE endpoints from Kotlin backends
+description: Host AG-UI compliant HTTP streaming endpoints from Kotlin backends
 ---
 
 # kotlin-server
@@ -9,9 +9,6 @@ The `kotlin-server` module provides lightweight helpers for exposing AG-UI
 compatible endpoints from JVM servers built with Ktor. It is designed to pair
 with the existing client SDK so that Kotlin agents can be hosted and consumed
 without additional glue code.
-
-> The module currently focuses on Server-Sent Events (SSE) streaming, matching
-the default transport used by the AG-UI clients.
 
 ## Installation
 
@@ -25,22 +22,19 @@ dependencies {
 
 ## Quick start
 
-Install the AG-UI SSE route inside your Ktor application and return a flow of
-`BaseEvent` objects:
+Install the AG-UI streaming route inside your Ktor application and return a
+flow of `BaseEvent` objects:
 
 ```kotlin
-import com.agui.server.aguiSseAgent
+import com.agui.server.aguiStreamingAgent
 import com.agui.core.types.*
 import io.ktor.server.application.*
 import io.ktor.server.routing.*
-import io.ktor.server.sse.*
 import kotlinx.coroutines.flow.flow
 
 fun Application.module() {
-    install(SSE)
-
     routing {
-        aguiSseAgent("/agent") { input ->
+        aguiStreamingAgent("/agent") { input ->
             flow {
                 emit(RunStartedEvent(threadId = input.threadId, runId = input.runId))
                 val messageId = "assistant-${'$'}{input.runId}"
@@ -54,22 +48,23 @@ fun Application.module() {
 }
 ```
 
-The helper takes care of serialising each event as SSE and, if an exception is
-thrown, emits a `RUN_ERROR` event so the client receives structured feedback.
+The helper takes care of serialising each event as newline-delimited JSON and,
+if an exception is thrown, emits a `RUN_ERROR` event so the client receives
+structured feedback.
 
 ## Error handling
 
-If the handler throws an exception after the SSE stream has started, the helper
-logs the failure and emits a `RunErrorEvent` with the message and a
-`SERVER_ERROR` code. Clients can surface this information to users instead of
-failing with a transport error.
+If the handler throws an exception after the stream has started, the helper logs
+the failure and emits a `RunErrorEvent` with the message and a `SERVER_ERROR`
+code. Clients can surface this information to users instead of failing with a
+transport error.
 
 ## Related utilities
 
-- [`SseEventEncoder`](https://github.com/ag-ui-protocol/ag-ui/) – converts
-  `BaseEvent` instances into `ServerSentEvent` payloads. It powers
-  `aguiSseAgent` but can also be used directly when building custom streaming
-  logic.
+- [`AgUiStreamingEndpoint`](https://github.com/ag-ui-protocol/ag-ui/) – the
+  helper showcased above. If you previously used the SSE helper, it remains
+  available as `aguiSseAgent` but is now deprecated in favour of HTTP
+  streaming.
 - Works seamlessly with the `HttpAgent` client in the Kotlin SDK, as covered in
   the module tests.
 

@@ -6,10 +6,10 @@ import com.agui.core.types.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
+import io.ktor.serialization.kotlinx.json.*
 import io.ktor.server.application.*
 import io.ktor.server.routing.*
 import io.ktor.server.testing.*
-import io.ktor.serialization.kotlinx.json.*
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.toList
@@ -19,7 +19,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
-class AgUiSseEndpointTest {
+class AgUiStreamingEndpointTest {
     @Test
     fun `streams events to HttpAgent`() = runTest {
         testApplication {
@@ -28,7 +28,7 @@ class AgUiSseEndpointTest {
                     json(AgUiJson)
                 }
                 routing {
-                    aguiSseAgent(path = "/agent") { input ->
+                    aguiStreamingAgent(path = "/agent") { input ->
                         flow {
                             emit(RunStartedEvent(threadId = input.threadId, runId = input.runId))
                             val messageId = "msg-1"
@@ -45,7 +45,6 @@ class AgUiSseEndpointTest {
                 install(io.ktor.client.plugins.contentnegotiation.ContentNegotiation) {
                     json(AgUiJson)
                 }
-                install(io.ktor.client.plugins.sse.SSE)
             }
 
             val endpointUrl = "http://localhost/agent"
@@ -83,14 +82,14 @@ class AgUiSseEndpointTest {
     }
 
     @Test
-    fun `responds with SSE payload and content type`() = runTest {
+    fun `responds with NDJSON payload and content type`() = runTest {
         testApplication {
             application {
                 install(io.ktor.server.plugins.contentnegotiation.ContentNegotiation) {
                     json(AgUiJson)
                 }
                 routing {
-                    aguiSseAgent(path = "/agent") { input ->
+                    aguiStreamingAgent(path = "/agent") { input ->
                         flowOf(
                             RunStartedEvent(threadId = input.threadId, runId = input.runId),
                             RunFinishedEvent(threadId = input.threadId, runId = input.runId)
@@ -104,34 +103,36 @@ class AgUiSseEndpointTest {
                 setBody(
                     AgUiJson.encodeToString(
                         RunAgentInput(
-                            threadId = "thread-sse",
-                            runId = "run-sse"
+                            threadId = "thread-json",
+                            runId = "run-json"
                         )
                     )
                 )
             }
 
             val rawContentType = response.headers[HttpHeaders.ContentType]
-            assertTrue(rawContentType?.startsWith("text/event-stream") == true)
+            assertTrue(rawContentType == null || rawContentType.startsWith(ContentType.Application.Json.toString()))
 
             val payload = response.bodyAsText()
             val frames = payload
-                .split(Regex("\\r?\\n\\r?\\n"))
+                .lineSequence()
                 .filter { it.isNotBlank() }
+                .toList()
             assertEquals(2, frames.size)
 
             val expectedStart =
-                "data: " + AgUiJson.encodeToString(
+                AgUiJson.encodeToString(
                     BaseEvent.serializer(),
-                    RunStartedEvent(threadId = "thread-sse", runId = "run-sse")
+                    RunStartedEvent(threadId = "thread-json", runId = "run-json")
                 )
             val expectedEnd =
-                "data: " + AgUiJson.encodeToString(
+                AgUiJson.encodeToString(
                     BaseEvent.serializer(),
-                    RunFinishedEvent(threadId = "thread-sse", runId = "run-sse")
+                    RunFinishedEvent(threadId = "thread-json", runId = "run-json")
                 )
 
             assertEquals(listOf(expectedStart, expectedEnd), frames)
+            assertEquals("chunked", response.headers[HttpHeaders.TransferEncoding])
         }
     }
 
@@ -143,7 +144,7 @@ class AgUiSseEndpointTest {
                     json(AgUiJson)
                 }
                 routing {
-                    aguiSseAgent(path = "/agent") {
+                    aguiStreamingAgent(path = "/agent") {
                         throw IllegalStateException()
                     }
                 }
@@ -153,7 +154,6 @@ class AgUiSseEndpointTest {
                 install(io.ktor.client.plugins.contentnegotiation.ContentNegotiation) {
                     json(AgUiJson)
                 }
-                install(io.ktor.client.plugins.sse.SSE)
             }
 
             val httpAgent = HttpAgent(
@@ -193,7 +193,7 @@ class AgUiSseEndpointTest {
                     json(AgUiJson)
                 }
                 routing {
-                    aguiSseAgent(path = "/agent") {
+                    aguiStreamingAgent(path = "/agent") {
                         throw IllegalStateException("boom")
                     }
                 }
@@ -203,7 +203,6 @@ class AgUiSseEndpointTest {
                 install(io.ktor.client.plugins.contentnegotiation.ContentNegotiation) {
                     json(AgUiJson)
                 }
-                install(io.ktor.client.plugins.sse.SSE)
             }
 
             val endpointUrl = "http://localhost/agent"

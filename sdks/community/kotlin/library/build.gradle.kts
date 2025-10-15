@@ -2,8 +2,8 @@
 // All modules are configured individually - see each module's build.gradle.kts
 
 plugins {
-    kotlin("multiplatform") version "2.1.21" apply false
-    kotlin("plugin.serialization") version "2.1.21" apply false
+    kotlin("multiplatform") version "2.2.20" apply false
+    kotlin("plugin.serialization") version "2.2.20" apply false
     id("com.android.library") version "8.10.1" apply false
     id("org.jetbrains.dokka") version "2.0.0"
 }
@@ -66,7 +66,7 @@ tasks.register("dokkaHtmlMultiModule") {
     
     <div class="module">
         <h2><a href="client/index.html">client</a></h2>
-        <p class="description">Client implementations, HTTP transport, SSE parsing, state management, and high-level agent SDKs</p>
+        <p class="description">Client implementations, HTTP transport, NDJSON streaming, state management, and high-level agent SDKs</p>
     </div>
     
     <div class="module">
@@ -76,7 +76,7 @@ tasks.register("dokkaHtmlMultiModule") {
 
     <div class="module">
         <h2><a href="server/index.html">server</a></h2>
-        <p class="description">Server utilities for hosting AG-UI compliant SSE endpoints</p>
+        <p class="description">Server utilities for hosting AG-UI compliant HTTP streaming endpoints</p>
     </div>
     
     <p style="margin-top: 2rem; color: #6b7280; font-size: 0.9rem;">

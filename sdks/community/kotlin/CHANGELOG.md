@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Initial release of ag-ui-4k client library
 - Core AG-UI protocol implementation for Kotlin Multiplatform
-- HttpAgent client with SSE support for connecting to AG-UI agents
+- HttpAgent client with newline-delimited JSON streaming support for connecting to AG-UI agents
 - Event-driven streaming architecture using Kotlin Flows
 - Full type safety with sealed classes for events and messages
 - Support for Android, iOS, and JVM platforms
@@ -22,9 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - State management with snapshots and deltas
 - Tool integration for human-in-the-loop workflows
 - Cancellation support through coroutines
-- Built with Kotlin 2.1.21 and K2 compiler
-- Powered by Ktor 3.1.3 for networking
-- Uses kotlinx.serialization 1.8.1 for JSON handling
+- Built with Kotlin 2.2.20 and K2 compiler
+- Powered by Ktor 3.2.3 for networking
+- Uses kotlinx.serialization 1.9.0 for JSON handling
 - Comprehensive documentation and examples
 - GitHub Actions CI/CD workflow
 - Detekt static code analysis

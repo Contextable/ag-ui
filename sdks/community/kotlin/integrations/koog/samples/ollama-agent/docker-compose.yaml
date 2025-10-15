@@ -1,0 +1,24 @@
+version: "3.9"
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ./ollama-data:/data
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+
+  koog-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      MODEL_RUNNER_BASE_URL: http://ollama:11434/v1
+      MODEL_RUNNER_CHAT_MODEL: llama3
+      SYSTEM_PROMPT: "You are a Kotlin Koog agent speaking AG-UI."
+    ports:
+      - "8080:8080"
+    depends_on:
+      - ollama

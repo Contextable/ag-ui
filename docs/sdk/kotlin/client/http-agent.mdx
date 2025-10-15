@@ -5,7 +5,7 @@ description: Low-level HTTP transport implementation for AG-UI protocol
 
 # HttpAgent
 
-`HttpAgent` is a low-level HTTP transport implementation that provides direct control over AG-UI protocol communication. It handles the core HTTP communication, Server-Sent Events (SSE) parsing, and event verification, serving as the foundation for higher-level agent implementations.
+`HttpAgent` is a low-level HTTP transport implementation that provides direct control over AG-UI protocol communication. It handles the core HTTP communication, newline-delimited JSON (NDJSON) streaming, and event verification, serving as the foundation for higher-level agent implementations.
 
 ## Usage Scenarios
 
@@ -155,12 +155,12 @@ httpAgent.run(input).collect { event ->
 
 ## HTTP Transport Details
 
-### Server-Sent Events (SSE)
-HttpAgent uses SSE for real-time streaming:
-- Automatic connection management
-- Reconnection on connection loss
-- Proper SSE event parsing
-- Content-Type: `text/event-stream`
+### Newline-Delimited JSON Streaming
+HttpAgent streams responses using newline-delimited JSON (NDJSON):
+- Standard HTTP `application/json` responses with chunked transfer encoding
+- Incremental decoding of each JSON object as it arrives
+- Automatic recovery when malformed lines are encountered
+- Compatible with OpenAI, Docker Model Runner, Ollama, and other OpenAI-style endpoints
 
 ### Request Format
 POST requests to `/agent` endpoint with:

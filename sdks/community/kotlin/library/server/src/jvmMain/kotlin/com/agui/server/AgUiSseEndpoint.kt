@@ -18,18 +18,17 @@ import kotlinx.serialization.json.Json
 private val logger = Logger.withTag("AgUiSseEndpoint")
 
 /**
- * Installs an AG-UI compliant SSE endpoint on the provided [Route].
+ * Installs an SSE endpoint for legacy experiments.
  *
- * The endpoint accepts a `RunAgentInput` payload via POST and streams AG-UI
- * events back to the caller using Server-Sent Events. Any exception thrown while
- * producing events is surfaced to the client as a `RUN_ERROR` event so clients
- * receive structured failure information.
- *
- * @param path Endpoint path relative to the current route (default: "/")
- * @param json JSON serializer used to encode events (defaults to [AgUiJson])
- * @param agentRunner Callback that produces a flow of AG-UI events for the
- * provided [RunAgentInput].
+ * AG-UI uses newline-delimited JSON over HTTP for production transports. New
+ * deployments should prefer [aguiStreamingAgent]. This helper remains available
+ * for backward compatibility with prototypes built against the original SSE
+ * proof-of-concept.
  */
+@Deprecated(
+    message = "AG-UI uses HTTP streaming with newline-delimited JSON. Use aguiStreamingAgent instead.",
+    replaceWith = ReplaceWith("aguiStreamingAgent(path, json, agentRunner)")
+)
 fun Route.aguiSseAgent(
     path: String = "/",
     json: Json = AgUiJson,

@@ -1,8 +1,9 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.targets.js.dsl.ExperimentalWasmDsl
 
 plugins {
-    kotlin("multiplatform") version "2.1.21"
-    kotlin("plugin.serialization") version "2.1.21"
+    kotlin("multiplatform") version "2.2.20"
+    kotlin("plugin.serialization") version "2.2.20"
     id("com.android.library") version "8.2.2"
     id("io.gitlab.arturbosch.detekt") version "1.23.4"
     id("maven-publish")
@@ -43,9 +44,9 @@ kotlin {
     
     // Android target
     androidTarget {
-        compilations.all {
-            kotlinOptions {
-                jvmTarget = "11"
+        compilations.configureEach {
+            compilerOptions {
+                jvmTarget.set(JvmTarget.JVM_11)
             }
         }
         publishLibraryVariants("release")
@@ -58,9 +59,9 @@ kotlin {
     
     // JVM target
     jvm {
-        compilations.all {
-            kotlinOptions {
-                jvmTarget = "11"
+        compilations.configureEach {
+            compilerOptions {
+                jvmTarget.set(JvmTarget.JVM_11)
             }
         }
         testRuns["test"].executionTask.configure {
@@ -84,14 +85,14 @@ kotlin {
         val commonMain by getting {
             dependencies {
                 // Ktor for networking
-                implementation("io.ktor:ktor-client-core:3.1.3")
-                implementation("io.ktor:ktor-client-content-negotiation:3.1.3")
-                implementation("io.ktor:ktor-serialization-kotlinx-json:3.1.3")
-                implementation("io.ktor:ktor-client-logging:3.1.3")
+                implementation("io.ktor:ktor-client-core:3.2.3")
+                implementation("io.ktor:ktor-client-content-negotiation:3.2.3")
+                implementation("io.ktor:ktor-serialization-kotlinx-json:3.2.3")
+                implementation("io.ktor:ktor-client-logging:3.2.3")
                 
                 // Kotlinx libraries
                 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
-                implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1")
+                implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
                 implementation("org.jetbrains.kotlinx:kotlinx-datetime:0.6.2")
                 
                 // Logging
@@ -103,13 +104,13 @@ kotlin {
             dependencies {
                 implementation(kotlin("test"))
                 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
-                implementation("io.ktor:ktor-client-mock:3.1.3")
+                implementation("io.ktor:ktor-client-mock:3.2.3")
             }
         }
         
         val androidMain by getting {
             dependencies {
-                implementation("io.ktor:ktor-client-android:3.1.3")
+                implementation("io.ktor:ktor-client-android:3.2.3")
                 implementation("org.slf4j:slf4j-android:1.7.36")
             }
         }
@@ -124,13 +125,13 @@ kotlin {
             iosSimulatorArm64Main.dependsOn(this)
             
             dependencies {
-                implementation("io.ktor:ktor-client-darwin:3.1.3")
+                implementation("io.ktor:ktor-client-darwin:3.2.3")
             }
         }
         
         val jvmMain by getting {
             dependencies {
-                implementation("io.ktor:ktor-client-java:3.1.3")
+                implementation("io.ktor:ktor-client-java:3.2.3")
                 implementation("org.slf4j:slf4j-simple:2.0.9")
             }
         }
