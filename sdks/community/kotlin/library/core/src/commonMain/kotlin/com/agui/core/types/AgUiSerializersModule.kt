@@ -23,10 +23,11 @@ val AgUiSerializersModule by lazy {
             subclass(TextMessageContentEvent::class)
             subclass(TextMessageEndEvent::class)
 
-            // Tool Call Events (3)
+            // Tool Call Events (4)
             subclass(ToolCallStartEvent::class)
             subclass(ToolCallArgsEvent::class)
             subclass(ToolCallEndEvent::class)
+            subclass(ToolCallResultEvent::class)
 
             // State Management Events (3)
             subclass(StateSnapshotEvent::class)
@@ -36,6 +37,17 @@ val AgUiSerializersModule by lazy {
             // Special Events (2)
             subclass(RawEvent::class)
             subclass(CustomEvent::class)
+
+            // Thinking Events (5)
+            subclass(ThinkingStartEvent::class)
+            subclass(ThinkingEndEvent::class)
+            subclass(ThinkingTextMessageStartEvent::class)
+            subclass(ThinkingTextMessageContentEvent::class)
+            subclass(ThinkingTextMessageEndEvent::class)
+
+            // Chunk Events (2)
+            subclass(TextMessageChunkEvent::class)
+            subclass(ToolCallChunkEvent::class)
         }
 
         polymorphic(Message::class) {
