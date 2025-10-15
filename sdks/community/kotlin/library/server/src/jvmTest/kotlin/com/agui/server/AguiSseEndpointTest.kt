@@ -3,11 +3,15 @@ package com.agui.server
 import com.agui.client.agent.HttpAgent
 import com.agui.client.agent.HttpAgentConfig
 import com.agui.core.types.*
-import io.ktor.serialization.kotlinx.json.*
+import io.ktor.client.request.*
+import io.ktor.client.statement.*
+import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.routing.*
 import io.ktor.server.testing.*
+import io.ktor.serialization.kotlinx.json.*
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
@@ -73,6 +77,109 @@ class AguiSseEndpointTest {
             assertEquals("Hello", (events[2] as TextMessageContentEvent).delta)
             assertTrue(events[3] is TextMessageEndEvent)
             assertTrue(events[4] is RunFinishedEvent)
+
+            httpAgent.dispose()
+        }
+    }
+
+    @Test
+    fun `responds with SSE payload and content type`() = runTest {
+        testApplication {
+            application {
+                install(io.ktor.server.plugins.contentnegotiation.ContentNegotiation) {
+                    json(AgUiJson)
+                }
+                routing {
+                    aguiSseAgent(path = "/agent") { input ->
+                        flowOf(
+                            RunStartedEvent(threadId = input.threadId, runId = input.runId),
+                            RunFinishedEvent(threadId = input.threadId, runId = input.runId)
+                        )
+                    }
+                }
+            }
+
+            val response = client.post("/agent") {
+                contentType(ContentType.Application.Json)
+                setBody(
+                    AgUiJson.encodeToString(
+                        RunAgentInput(
+                            threadId = "thread-sse",
+                            runId = "run-sse"
+                        )
+                    )
+                )
+            }
+
+            val rawContentType = response.headers[HttpHeaders.ContentType]
+            assertTrue(rawContentType?.startsWith("text/event-stream") == true)
+
+            val payload = response.bodyAsText()
+            val frames = payload
+                .split(Regex("\\r?\\n\\r?\\n"))
+                .filter { it.isNotBlank() }
+            assertEquals(2, frames.size)
+
+            val expectedStart =
+                "data: " + AgUiJson.encodeToString(
+                    BaseEvent.serializer(),
+                    RunStartedEvent(threadId = "thread-sse", runId = "run-sse")
+                )
+            val expectedEnd =
+                "data: " + AgUiJson.encodeToString(
+                    BaseEvent.serializer(),
+                    RunFinishedEvent(threadId = "thread-sse", runId = "run-sse")
+                )
+
+            assertEquals(listOf(expectedStart, expectedEnd), frames)
+        }
+    }
+
+    @Test
+    fun `propagates default error message when throwable has none`() = runTest {
+        testApplication {
+            application {
+                install(io.ktor.server.plugins.contentnegotiation.ContentNegotiation) {
+                    json(AgUiJson)
+                }
+                routing {
+                    aguiSseAgent(path = "/agent") {
+                        throw IllegalStateException()
+                    }
+                }
+            }
+
+            val client = createClient {
+                install(io.ktor.client.plugins.contentnegotiation.ContentNegotiation) {
+                    json(AgUiJson)
+                }
+                install(io.ktor.client.plugins.sse.SSE)
+            }
+
+            val httpAgent = HttpAgent(
+                config = HttpAgentConfig(
+                    url = "http://localhost/agent",
+                    threadId = "thread-default-error",
+                    initialState = JsonObject(emptyMap()),
+                    initialMessages = emptyList(),
+                    debug = false,
+                    headers = emptyMap()
+                ),
+                httpClient = client
+            )
+
+            val events = httpAgent
+                .runAgentObservable(
+                    RunAgentInput(
+                        threadId = "thread-default-error",
+                        runId = "run-default-error"
+                    )
+                )
+                .toList()
+
+            val errorEvent = events.single() as RunErrorEvent
+            assertEquals("SERVER_ERROR", errorEvent.code)
+            assertEquals("Unhandled server error", errorEvent.message)
 
             httpAgent.dispose()
         }
