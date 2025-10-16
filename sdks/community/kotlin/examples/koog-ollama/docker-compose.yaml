@@ -1,0 +1,23 @@
+services:
+  ollama:
+    image: ollama/ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+  koog-agent:
+    build:
+      context: ../../../../..
+      dockerfile: sdks/community/kotlin/examples/koog-ollama/Dockerfile
+    environment:
+      MODEL_RUNNER_BASE_URL: http://ollama:11434/v1
+      MODEL_RUNNER_CHAT_MODEL: llama3
+      SYSTEM_PROMPT: ${SYSTEM_PROMPT:-You are a helpful assistant.}
+      SERVER_PORT: "8080"
+    ports:
+      - "8080:8080"
+    depends_on:
+      - ollama
+    restart: unless-stopped
+volumes:
+  ollama-data:

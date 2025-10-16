@@ -70,6 +70,14 @@ Utilities for exposing AG-UI compliant HTTP endpoints from Kotlin servers.
 
 [Learn more about the Server module →](/docs/sdk/kotlin/server/overview)
 
+### kotlin-koog
+Optional Koog adapter that lets JetBrains Koog agents stream native AG-UI events.
+- **KoogStreamTranslator**: Converts Koog stream frames and tool calls into AG-UI protocol events
+- **KoogAguiAgent**: Wraps a Koog agent and exposes an AG-UI compliant flow interface
+- **Koog Tool Registry DSL**: Registers tools once and shares metadata with both Koog and AG-UI
+
+[Learn more about the Koog adapter →](/docs/sdk/kotlin/server/koog-adapter)
+
 ## Supported Platforms
 
 | Platform | Status | Minimum Version |

@@ -22,9 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - State management with snapshots and deltas
 - Tool integration for human-in-the-loop workflows
 - Cancellation support through coroutines
-- Built with Kotlin 2.1.21 and K2 compiler
-- Powered by Ktor 3.1.3 for networking
-- Uses kotlinx.serialization 1.8.1 for JSON handling
+- Built with Kotlin 2.2.20 and K2 compiler
+- Powered by Ktor 3.2.3 for networking
+- Uses kotlinx.serialization 1.9.0 for JSON handling
 - Comprehensive documentation and examples
 - GitHub Actions CI/CD workflow
 - Detekt static code analysis
