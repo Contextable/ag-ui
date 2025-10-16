@@ -2,7 +2,7 @@
 
 ## K2 Compiler Benefits
 
-AG-UI Kotlin SDK leverages Kotlin 2.1.21's K2 compiler for significant performance improvements:
+AG-UI Kotlin SDK leverages Kotlin 2.2.20's K2 compiler for significant performance improvements:
 
 ### Compilation Performance
 - **2x faster** incremental compilation
@@ -23,7 +23,7 @@ AG-UI Kotlin SDK leverages Kotlin 2.1.21's K2 compiler for significant performan
 
 ## Ktor 3 Improvements
 
-The upgrade to Ktor 3.1.3 brings:
+The upgrade to Ktor 3.2.3 brings:
 
 - **30% faster** SSE parsing
 - **Native HTTP/2** support (when available)
@@ -32,7 +32,7 @@ The upgrade to Ktor 3.1.3 brings:
 
 ## Serialization Performance
 
-kotlinx.serialization 1.8.1 provides:
+kotlinx.serialization 1.9.0 provides:
 
 - **2.5x faster** JSON parsing for large payloads
 - **50% less memory** usage during deserialization

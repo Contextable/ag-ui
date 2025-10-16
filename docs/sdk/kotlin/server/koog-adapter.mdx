@@ -1,0 +1,85 @@
+---
+title: Koog Adapter
+description: Bridge JetBrains Koog agents to the AG-UI protocol with the Kotlin SDK
+---
+
+# Koog Adapter
+
+The optional `kotlin-koog` module extends the Kotlin SDK with utilities that translate
+JetBrains Koog agent streams into native AG-UI events. Use it when you want to keep Koog's
+graph, tool registry, and memory features while exposing a standard AG-UI SSE endpoint.
+
+## Core Components
+
+### KoogStreamTranslator
+Consumes Koog `KoogStreamFrame` flows and emits `BaseEvent` instances. It understands:
+
+- Lifecycle frames (`SessionStarted`, `SessionFinished`, `SessionError`)
+- Text deltas and thinking output for both assistant and reasoning channels
+- Tool invocation frames, automatically dispatching tool calls through the AG-UI tools module
+- State snapshots, JSON Patch deltas, custom frames, and raw diagnostic data
+
+```kotlin
+val translator = KoogStreamTranslator()
+val events: Flow<BaseEvent> = translator.translate(context, koogFrames, toolRegistry)
+```
+
+### KoogAguiAgent
+Wraps a Koog agent implementation and returns a ready-to-stream `Flow<BaseEvent>`
+that can be attached to `aguiSseAgent`.
+
+```kotlin
+val aguiAgent = KoogAguiAgent(
+    agent = koogAgent,
+    translator = KoogStreamTranslator(),
+    toolRegistry = koogToolRegistry { /* register tools */ }
+)
+
+routing {
+    aguiSseAgent("/agent/stream") { input ->
+        aguiAgent.stream(input)
+    }
+}
+```
+
+### Koog Tool Registry DSL
+Define Koog + AG-UI compatible tools once and reuse them across both frameworks.
+
+```kotlin
+val tools = koogToolRegistry {
+    tool(
+        name = "weather",
+        description = "Fetch the current weather",
+        parameters = buildJsonObject { put("type", JsonPrimitive("object")) }
+    ) { context ->
+        ToolExecutionResult.success(result = buildJsonObject { put("summary", JsonPrimitive("Sunny")) })
+    }
+}
+```
+
+The registry delegates to the shared `ToolRegistry`, so your Koog agent can execute tools while
+AG-UI clients receive structured tool call events and results.
+
+## Ollama Sample
+
+The `sdks/community/kotlin/examples/koog-ollama` example spins up a Ktor server in Docker
+that streams AG-UI events from a Koog agent backed by an Ollama model container. The stack includes:
+
+- `Dockerfile` – builds the Koog agent inside a JVM image
+- `docker-compose.yaml` – runs Ollama and the Koog agent together with shared networking
+- Environment variables (`MODEL_RUNNER_BASE_URL`, `MODEL_RUNNER_CHAT_MODEL`, `SYSTEM_PROMPT`, `SERVER_PORT`)
+
+Run the stack:
+
+```bash
+cd sdks/community/kotlin/examples/koog-ollama
+docker compose up --build
+```
+
+The agent exposes `POST /agent/stream` (SSE) and `GET /health` (liveness) on port `8080`.
+
+## Next Steps
+
+- Explore the sample to see how `KoogStreamTranslator` maps Koog frames into AG-UI events
+- Extend the tool registry DSL with your domain tools
+- Swap Ollama for another OpenAI-compatible runtime by adjusting `MODEL_RUNNER_BASE_URL`
