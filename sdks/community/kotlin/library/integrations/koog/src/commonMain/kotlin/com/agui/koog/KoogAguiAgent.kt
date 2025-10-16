@@ -1,4 +1,4 @@
-package com.agui.integrations.koog
+package com.agui.koog
 
 import com.agui.core.types.BaseEvent
 import com.agui.core.types.RunAgentInput

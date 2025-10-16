@@ -14,6 +14,14 @@ dependencies {
     implementation(project(":kotlin-tools"))
     implementation(project(":kotlin-koog"))
 
+    val koogVersion = "0.5.0"
+
+    implementation("ai.koog:prompt-executor-openai-client:$koogVersion")
+    implementation("ai.koog:prompt-model:$koogVersion")
+    implementation("ai.koog:prompt-llm:$koogVersion")
+    implementation("ai.koog:koog-agents:$koogVersion")
+    implementation("ai.koog:prompt-executor-llms:$koogVersion")
+
     implementation("io.ktor:ktor-server-cio:3.2.3")
     implementation("io.ktor:ktor-server-content-negotiation:3.2.3")
     implementation("io.ktor:ktor-serialization-kotlinx-json:3.2.3")

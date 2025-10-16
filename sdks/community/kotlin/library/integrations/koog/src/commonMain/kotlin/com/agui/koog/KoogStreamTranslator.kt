@@ -1,4 +1,4 @@
-package com.agui.integrations.koog
+package com.agui.koog
 
 import com.agui.core.types.AgUiJson
 import com.agui.core.types.BaseEvent
@@ -62,7 +62,7 @@ class KoogStreamTranslator(
         val activeThinking = mutableSetOf<String>()
         val activeToolCalls = mutableSetOf<String>()
 
-        fun emitRunStarted(timestamp: Long?) {
+        suspend fun emitRunStarted(timestamp: Long?) {
             if (!runStarted) {
                 val event = RunStartedEvent(
                     threadId = threadId,
@@ -136,7 +136,7 @@ class KoogStreamTranslator(
 
                     is KoogStreamFrame.ThinkingFinished -> {
                         emitRunStarted(frame.timestamp)
-                        emit(ThinkingEndEvent(frame.title, frame.timestamp, frame.raw))
+                        emit(ThinkingEndEvent(frame.timestamp, frame.raw))
                     }
 
                     is KoogStreamFrame.MessageStarted -> {

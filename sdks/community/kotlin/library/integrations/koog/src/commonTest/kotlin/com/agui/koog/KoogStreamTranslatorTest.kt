@@ -1,4 +1,4 @@
-package com.agui.integrations.koog
+package com.agui.koog
 
 import app.cash.turbine.test
 import com.agui.core.types.RunFinishedEvent
@@ -55,9 +55,9 @@ class KoogStreamTranslatorTest {
                 name = "echo",
                 description = "Echo value",
                 parameters = buildJsonObject { put("type", JsonPrimitive("object")) }
-            ) { context: ToolExecutionContext ->
+            ) {
                 ToolExecutionResult.success(
-                    result = buildJsonObject { put("echo", JsonPrimitive(context.toolCall.function.arguments)) }
+                    result = buildJsonObject { put("echo", JsonPrimitive(toolCall.function.arguments)) }
                 )
             }
         }
@@ -83,7 +83,8 @@ class KoogStreamTranslatorTest {
             assertIs<ToolCallEndEvent>(awaitItem())
             val result = awaitItem()
             assertIs<ToolCallResultEvent>(result)
-            assertTrue(result.content.contains("call-1"))
+            assertEquals("call-1", result.toolCallId)
+            assertTrue(result.content.contains("\"success\":true"))
             assertIs<RunFinishedEvent>(awaitItem())
             awaitComplete()
         }
