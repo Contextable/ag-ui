@@ -3,9 +3,10 @@ package com.agui.samples.koog.ollama
 import ai.koog.agents.core.agent.AIAgent
 import ai.koog.agents.core.agent.FunctionalAIAgent
 import ai.koog.agents.core.agent.config.AIAgentConfig
-import ai.koog.agents.core.agent.asAssistantMessageOrNull
 import ai.koog.agents.core.agent.functionalStrategy
-import ai.koog.agents.core.agent.requestLLM
+import ai.koog.agents.core.dsl.extension.asAssistantMessageOrNull
+import ai.koog.agents.core.dsl.extension.requestLLM
+import ai.koog.agents.core.dsl.extension.requestLLMStreaming
 import ai.koog.agents.core.tools.ToolRegistry
 import ai.koog.agents.features.eventHandler.feature.EventHandler
 import ai.koog.agents.features.eventHandler.feature.EventHandlerConfig
@@ -50,6 +51,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import ai.koog.prompt.streaming.StreamFrame
 
 private val logger = Logger.withTag("KoogOllamaSample")
 
@@ -125,27 +127,95 @@ private class FunctionalKoogAgent(
         val messageId = "assistant-${input.runId}"
         var sessionClosed = false
 
-        // NOTE: Koog tracing via Tracing.Feature is only available once 0.5.1 lands on Maven.
-        // Until then, we rely on EventHandler callbacks for minimal diagnostics.
+        // Koog 0.5.1 exposes richer tracing hooks; until a functional-agent friendly
+        // variant lands we continue to lean on EventHandler callbacks for diagnostics.
         val agent: FunctionalAIAgent<KoogAgentInput, Unit> = AIAgent(
             promptExecutor = promptExecutor,
             agentConfig = prepared.config,
             strategy = functionalStrategy("koog-ollama-functional") { agentInput ->
                 val userMessage = prepared.latestUserMessage ?: ""
-                val response = requestLLM(userMessage)
-                logger.i { "Assistant message: ${response.asAssistantMessageOrNull()?.content}" }
-                val assistant = response.asAssistantMessageOrNull()
-                val content = assistant?.content.orEmpty()
-                if (content.isNotEmpty()) {
-                    trySend(KoogStreamFrame.MessageStarted(messageId = messageId))
-                    trySend(
-                        KoogStreamFrame.MessageDelta(
-                            messageId = messageId,
-                            delta = content
-                        )
-                    )
-                    trySend(KoogStreamFrame.MessageFinished(messageId = messageId))
+                val aggregatedResponse = StringBuilder()
+                var messageStarted = false
+                var messageFinished = false
+                var streamed = false
+
+                val streamingResult = runCatching {
+                    requestLLMStreaming(userMessage).collect { frame ->
+                        when (frame) {
+                            is StreamFrame.Append -> {
+                                val delta = frame.text.orEmpty()
+                                if (delta.isNotEmpty()) {
+                                    if (!messageStarted) {
+                                        trySend(KoogStreamFrame.MessageStarted(messageId = messageId))
+                                        messageStarted = true
+                                    }
+                                    streamed = true
+                                    aggregatedResponse.append(delta)
+                                    trySend(
+                                        KoogStreamFrame.MessageDelta(
+                                            messageId = messageId,
+                                            delta = delta
+                                        )
+                                    )
+                                }
+                            }
+
+                            is StreamFrame.ToolCall -> {
+                                val toolCallId = frame.id ?: return@collect
+                                val toolName = frame.name ?: "anonymous_tool"
+                                trySend(
+                                    KoogStreamFrame.ToolCallStarted(
+                                        toolCallId = toolCallId,
+                                        toolName = toolName,
+                                        parentMessageId = messageId
+                                    )
+                                )
+                                frame.content?.takeIf { it.isNotEmpty() }?.let { args ->
+                                    trySend(
+                                        KoogStreamFrame.ToolCallArgsChunk(
+                                            toolCallId = toolCallId,
+                                            delta = args
+                                        )
+                                    )
+                                }
+                                trySend(KoogStreamFrame.ToolCallFinished(toolCallId = toolCallId))
+                            }
+
+                            is StreamFrame.End -> {
+                                if (messageStarted && !messageFinished) {
+                                    trySend(KoogStreamFrame.MessageFinished(messageId = messageId))
+                                    messageFinished = true
+                                }
+                            }
+                        }
+                    }
                 }
+
+                if (!streamed || streamingResult.isFailure) {
+                    val response = requestLLM(userMessage)
+                    val assistant = response.asAssistantMessageOrNull()
+                    val content = assistant?.content.orEmpty()
+                    if (content.isNotEmpty()) {
+                        if (!messageStarted) {
+                            trySend(KoogStreamFrame.MessageStarted(messageId = messageId))
+                            messageStarted = true
+                        }
+                        aggregatedResponse.append(content)
+                        trySend(
+                            KoogStreamFrame.MessageDelta(
+                                messageId = messageId,
+                                delta = content
+                            )
+                        )
+                    }
+                }
+
+                if (messageStarted && !messageFinished) {
+                    trySend(KoogStreamFrame.MessageFinished(messageId = messageId))
+                    messageFinished = true
+                }
+
+                logger.i { "Assistant message: ${aggregatedResponse.toString()}" }
                 trySend(
                     KoogStreamFrame.SessionFinished(
                         timestamp = System.currentTimeMillis()

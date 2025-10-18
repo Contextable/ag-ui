@@ -14,7 +14,7 @@ dependencies {
     implementation(project(":kotlin-tools"))
     implementation(project(":kotlin-koog"))
 
-    val koogVersion = "0.5.0"
+    val koogVersion = "0.5.1"
 
     implementation("ai.koog:prompt-executor-openai-client:$koogVersion")
     implementation("ai.koog:prompt-model:$koogVersion")
