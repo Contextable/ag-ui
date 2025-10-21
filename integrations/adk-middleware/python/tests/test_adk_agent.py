@@ -167,6 +167,143 @@ class TestADKAgent:
             mock_runner.close.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_run_skips_assistant_only_batches(self, adk_agent, sample_input):
+        """Assistant-only unseen messages should not start a new execution."""
+
+        assistant_tool_message = SimpleNamespace(
+            id="assistant-1",
+            role="assistant",
+            tool_calls=[SimpleNamespace(id="call-1")],
+            content=None,
+        )
+
+        start_calls: list = []
+
+        async def fake_start_new_execution(*args, **kwargs):
+            start_calls.append(kwargs)
+            if False:  # pragma: no cover - ensure async generator type
+                yield None
+
+        with patch.object(
+            adk_agent,
+            '_get_unseen_messages',
+            AsyncMock(return_value=[assistant_tool_message]),
+        ), patch.object(
+            adk_agent,
+            '_start_new_execution',
+            new=fake_start_new_execution,
+        ), patch.object(
+            adk_agent._session_manager,
+            'mark_messages_processed',
+        ) as mark_processed:
+            events = [event async for event in adk_agent.run(sample_input)]
+
+        assert start_calls == []
+        mark_processed.assert_called_once_with(
+            "test_app",
+            "test_thread",
+            ["assistant-1"],
+        )
+        assert events == []
+
+    @pytest.mark.asyncio
+    async def test_run_starts_for_user_batches(self, adk_agent, sample_input):
+        """User messages should still start a new execution even with assistant tool calls present."""
+
+        user_message = SimpleNamespace(
+            id="user-1",
+            role="user",
+            content="Hi",
+        )
+        assistant_tool_message = SimpleNamespace(
+            id="assistant-2",
+            role="assistant",
+            tool_calls=[SimpleNamespace(id="call-2")],
+            content=None,
+        )
+
+        start_calls: list = []
+
+        async def fake_start_new_execution(*args, **kwargs):
+            start_calls.append(kwargs.get('message_batch'))
+            if False:  # pragma: no cover - ensure async generator type
+                yield None
+
+        with patch.object(
+            adk_agent,
+            '_get_unseen_messages',
+            AsyncMock(return_value=[user_message, assistant_tool_message]),
+        ), patch.object(
+            adk_agent,
+            '_start_new_execution',
+            new=fake_start_new_execution,
+        ):
+            events = [event async for event in adk_agent.run(sample_input)]
+
+        assert start_calls == [[user_message, assistant_tool_message]]
+        assert events == []
+
+    def test_should_start_new_execution_only_for_user_or_system(self, adk_agent):
+        """Assistant messages should never trigger a new execution."""
+
+        user_message = SimpleNamespace(role="user")
+        system_message = SimpleNamespace(role="system")
+        assistant_tool_message = SimpleNamespace(role="assistant", tool_calls=[SimpleNamespace(id="call-3")], content=None)
+        assistant_text_message = SimpleNamespace(role="assistant", tool_calls=[], content="status update")
+
+        assert adk_agent._should_start_new_execution([user_message])
+        assert adk_agent._should_start_new_execution([system_message])
+        assert not adk_agent._should_start_new_execution([assistant_tool_message])
+        assert not adk_agent._should_start_new_execution([assistant_text_message])
+
+    @pytest.mark.asyncio
+    async def test_run_starts_execution_for_tool_results(self, adk_agent, sample_input):
+        """Tool result batches should continue execution through the tool handler."""
+
+        tool_message = SimpleNamespace(
+            id="tool-1",
+            role="tool",
+            tool_call_id="call-1",
+            content="{\"items\": []}",
+        )
+
+        start_kwargs: list = []
+
+        async def fake_start_new_execution(*args, **kwargs):
+            start_kwargs.append(kwargs)
+            if False:  # pragma: no cover - maintain async generator behaviour
+                yield None
+
+        with patch.object(
+            adk_agent,
+            '_get_unseen_messages',
+            AsyncMock(return_value=[tool_message]),
+        ), patch.object(
+            adk_agent,
+            '_extract_tool_results',
+            AsyncMock(return_value=[{'tool_name': 'render_ItemsList', 'message': tool_message}]),
+        ), patch.object(
+            adk_agent,
+            '_has_pending_tool_calls',
+            AsyncMock(return_value=True),
+        ), patch.object(
+            adk_agent,
+            '_remove_pending_tool_call',
+            AsyncMock(),
+        ), patch.object(
+            adk_agent,
+            '_start_new_execution',
+            new=fake_start_new_execution,
+        ):
+            events = [event async for event in adk_agent.run(sample_input)]
+
+        assert len(start_kwargs) == 1
+        assert start_kwargs[0]['tool_results'] == [
+            {'tool_name': 'render_ItemsList', 'message': tool_message}
+        ]
+        assert events == []
+
+    @pytest.mark.asyncio
     async def test_turn_complete_falls_back_to_streaming_translator(
         self,
         adk_agent,

@@ -366,6 +366,8 @@ class ADKAgent:
 
         index = 0
         total_unseen = len(unseen_messages)
+        app_name = self._get_app_name(input)
+        session_id = input.thread_id
 
         while index < total_unseen:
             current = unseen_messages[index]
@@ -385,8 +387,14 @@ class ADKAgent:
                     message_batch.append(unseen_messages[index])
                     index += 1
 
-                async for event in self._start_new_execution(input, message_batch=message_batch):
-                    yield event
+                if self._should_start_new_execution(message_batch):
+                    async for event in self._start_new_execution(input, message_batch=message_batch):
+                        yield event
+                else:
+                    # Mark assistant/tool-call-only batches as processed to avoid replays
+                    message_ids = self._collect_message_ids(message_batch)
+                    if message_ids:
+                        self._session_manager.mark_messages_processed(app_name, session_id, message_ids)
     
     async def _ensure_session_exists(self, app_name: str, user_id: str, session_id: str, initial_state: dict):
         """Ensure a session exists, creating it if necessary via session manager."""
@@ -456,6 +464,21 @@ class ADKAgent:
     def _collect_message_ids(self, messages: List[Any]) -> List[str]:
         """Extract message IDs from messages, skipping those without IDs."""
         return [getattr(message, "id") for message in messages if getattr(message, "id", None)]
+
+    def _should_start_new_execution(self, messages: List[Any]) -> bool:
+        """Determine if the provided messages require starting a new execution.
+
+        Tool role messages are handled by `_handle_tool_result_submission` and
+        therefore should never trigger a fresh execution through this helper.
+        """
+
+        for message in messages:
+            role = getattr(message, "role", None)
+
+            if role in {"user", "system"}:
+                return True
+
+        return False
 
     async def _is_tool_result_submission(
         self,
