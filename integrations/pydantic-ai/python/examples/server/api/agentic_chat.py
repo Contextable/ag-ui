@@ -5,10 +5,20 @@ from __future__ import annotations
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from pydantic_ai import Agent
+from pydantic import BaseModel
 
-agent = Agent('openai:gpt-4o-mini')
-app = agent.to_ag_ui()
+from pydantic_ai import Agent
+from pydantic_ai.ag_ui import StateDeps
+
+
+class AgenticChatState(BaseModel):
+    """Server-side state for the agentic chat demo."""
+
+    background: str | None = None
+
+
+agent = Agent('openai:gpt-4o-mini', deps_type=StateDeps[AgenticChatState])
+app = agent.to_ag_ui(deps=StateDeps(AgenticChatState()))
 
 
 @agent.tool_plain
