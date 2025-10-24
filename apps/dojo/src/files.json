@@ -46,7 +46,7 @@
     },
     {
       "name": "agentic_chat.py",
-      "content": "\"\"\"Agentic Chat feature.\"\"\"\n\nfrom __future__ import annotations\n\nfrom datetime import datetime\nfrom zoneinfo import ZoneInfo\n\nfrom pydantic_ai import Agent\n\nagent = Agent('openai:gpt-4o-mini')\napp = agent.to_ag_ui()\n\n\n@agent.tool_plain\nasync def current_time(timezone: str = 'UTC') -> str:\n    \"\"\"Get the current time in ISO format.\n\n    Args:\n        timezone: The timezone to use.\n\n    Returns:\n        The current time in ISO format string.\n    \"\"\"\n    tz: ZoneInfo = ZoneInfo(timezone)\n    return datetime.now(tz=tz).isoformat()\n",
+      "content": "\"\"\"Agentic Chat feature.\"\"\"\n\nfrom __future__ import annotations\n\nfrom datetime import datetime\nfrom zoneinfo import ZoneInfo\n\nfrom pydantic import BaseModel\n\nfrom pydantic_ai import Agent\nfrom pydantic_ai.ag_ui import StateDeps\n\n\nclass AgenticChatState(BaseModel):\n    \"\"\"Server-side state for the agentic chat demo.\"\"\"\n\n    background: str | None = None\n\n\nagent = Agent('openai:gpt-4o-mini', deps_type=StateDeps[AgenticChatState])\napp = agent.to_ag_ui(deps=StateDeps(AgenticChatState()))\n\n\n@agent.tool_plain\nasync def current_time(timezone: str = 'UTC') -> str:\n    \"\"\"Get the current time in ISO format.\n\n    Args:\n        timezone: The timezone to use.\n\n    Returns:\n        The current time in ISO format string.\n    \"\"\"\n    tz: ZoneInfo = ZoneInfo(timezone)\n    return datetime.now(tz=tz).isoformat()\n",
       "language": "python",
       "type": "file"
     }
