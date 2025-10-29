@@ -601,6 +601,44 @@ class TestToolResultFlow:
         assert getattr(tool_messages[0], 'id', None) == "tool_1"
 
     @pytest.mark.asyncio
+    async def test_run_does_not_mark_assistant_tool_calls_processed(self, ag_ui_adk):
+        """Assistant tool calls stay unprocessed until their result arrives."""
+        assistant_call = AssistantMessage(
+            id="assistant_tool",
+            role="assistant",
+            content=None,
+            tool_calls=[
+                ToolCall(
+                    id="call_1",
+                    function=FunctionCall(name="test_tool", arguments="{}"),
+                )
+            ],
+        )
+
+        input_data = RunAgentInput(
+            thread_id="thread_pending_tool",
+            run_id="run_pending_tool",
+            messages=[
+                UserMessage(id="user_initial", role="user", content="Initial"),
+                assistant_call,
+            ],
+            tools=[],
+            context=[],
+            state={},
+            forwarded_props={},
+        )
+
+        events = []
+        async for event in ag_ui_adk.run(input_data):
+            events.append(event)
+
+        processed_ids = ag_ui_adk._session_manager.get_processed_message_ids(
+            ag_ui_adk._get_app_name(input_data),
+            input_data.thread_id,
+        )
+        assert "assistant_tool" not in processed_ids
+
+    @pytest.mark.asyncio
     async def test_run_skips_assistant_history_before_tool_result(self, ag_ui_adk):
         """Assistant tool call history should not trigger a new execution before tool results arrive."""
         assistant_call = AssistantMessage(
@@ -708,7 +746,7 @@ class TestToolResultFlow:
         assert pending_call.args[1] == "call_1"
 
         processed_ids = ag_ui_adk._session_manager.get_processed_message_ids(app_name, input_data.thread_id)
-        assert "assistant_tool" in processed_ids
+        assert "assistant_tool" not in processed_ids
 
     @pytest.mark.asyncio
     async def test_run_preserves_order_for_user_then_tool(self, ag_ui_adk):

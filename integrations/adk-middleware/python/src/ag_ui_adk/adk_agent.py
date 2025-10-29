@@ -399,7 +399,8 @@ class ADKAgent:
 
                     if candidate_role == "assistant":
                         message_id = getattr(candidate, "id", None)
-                        if message_id:
+                        has_tool_calls = bool(getattr(candidate, "tool_calls", None))
+                        if message_id and not has_tool_calls:
                             assistant_message_ids.append(message_id)
                     else:
                         message_batch.append(candidate)
@@ -595,11 +596,7 @@ class ADKAgent:
                     for result in tool_results
                     if result.get('assistant_message') is not None
                 ]
-                if assistant_messages:
-                    tool_messages = list(candidate_messages) if candidate_messages else []
-                    message_batch = assistant_messages + tool_messages
-                else:
-                    message_batch = None
+                message_batch = assistant_messages if assistant_messages else None
             async for event in self._start_new_execution(
                 input,
                 tool_results=tool_results,
