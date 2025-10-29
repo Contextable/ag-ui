@@ -26,7 +26,8 @@ def convert_ag_ui_messages_to_adk(messages: List[Message]) -> List[ADKEvent]:
         List of ADK events
     """
     adk_events = []
-    
+    tool_call_name_map: Dict[str, str] = {}
+
     for message in messages:
         try:
             # Create base event
@@ -54,6 +55,15 @@ def convert_ag_ui_messages_to_adk(messages: List[Message]) -> List[ADKEvent]:
                 # Add tool calls if present
                 if message.tool_calls:
                     for tool_call in message.tool_calls:
+                        # Track tool call name for matching tool responses later
+                        try:
+                            if tool_call.id and getattr(tool_call, "function", None):
+                                function_name = getattr(tool_call.function, "name", None)
+                                if function_name:
+                                    tool_call_name_map[tool_call.id] = function_name
+                        except Exception:
+                            pass
+
                         parts.append(types.Part(
                             function_call=types.FunctionCall(
                                 name=tool_call.function.name,
@@ -70,11 +80,13 @@ def convert_ag_ui_messages_to_adk(messages: List[Message]) -> List[ADKEvent]:
             
             elif isinstance(message, ToolMessage):
                 # Tool messages become function responses
+                function_name = tool_call_name_map.get(message.tool_call_id, message.tool_call_id)
+
                 event.content = types.Content(
                     role="function",
                     parts=[types.Part(
                         function_response=types.FunctionResponse(
-                            name=message.tool_call_id, 
+                            name=function_name,
                             response={"result": message.content} if isinstance(message.content, str) else message.content,
                             id=message.tool_call_id
                         )

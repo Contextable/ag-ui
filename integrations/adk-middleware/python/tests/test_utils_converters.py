@@ -169,6 +169,38 @@ class TestConvertAGUIMessagesToADK:
         func_response = event.content.parts[0].function_response
         assert func_response.response == {"result": '{"result": "success", "value": 42}'}
 
+    def test_convert_tool_message_uses_function_name_when_available(self):
+        """Tool responses should carry original function names when known."""
+        tool_call = ToolCall(
+            id="call_789",
+            type="function",
+            function=FunctionCall(
+                name="render_items_list",
+                arguments='{"items": []}'
+            )
+        )
+
+        assistant_msg = AssistantMessage(
+            id="assistant_with_tool",
+            role="assistant",
+            tool_calls=[tool_call]
+        )
+
+        tool_msg = ToolMessage(
+            id="tool_response",
+            role="tool",
+            content='{"status": "ok"}',
+            tool_call_id="call_789"
+        )
+
+        adk_events = convert_ag_ui_messages_to_adk([assistant_msg, tool_msg])
+
+        assert len(adk_events) == 2
+
+        func_response = adk_events[1].content.parts[0].function_response
+        assert func_response.name == "render_items_list"
+        assert func_response.id == "call_789"
+
     def test_convert_empty_message_list(self):
         """Test converting an empty message list."""
         adk_events = convert_ag_ui_messages_to_adk([])
