@@ -201,6 +201,30 @@ class TestToolResultFlow:
         assert tool_results[0]['tool_name'] == "unknown"  # No tool_calls in messages
 
     @pytest.mark.asyncio
+    async def test_extract_tool_results_uses_cached_tool_name(self, ag_ui_adk):
+        """Fallback to cached tool name when transcript lacks tool call metadata."""
+        ag_ui_adk._pending_tool_call_names["thread_1"] = {"call_1": "render_ItemsList"}
+
+        input_data = RunAgentInput(
+            thread_id="thread_1",
+            run_id="run_1",
+            messages=[
+                UserMessage(id="1", role="user", content="Hello"),
+                ToolMessage(id="2", role="tool", content='{"result": "success"}', tool_call_id="call_1")
+            ],
+            tools=[],
+            context=[],
+            state={},
+            forwarded_props={}
+        )
+
+        tool_results = await ag_ui_adk._extract_tool_results(input_data, input_data.messages)
+
+        assert len(tool_results) == 1
+        assert tool_results[0]['tool_name'] == "render_ItemsList"
+        ag_ui_adk._pending_tool_call_names.clear()
+
+    @pytest.mark.asyncio
     async def test_extract_tool_results_multiple_tools(self, ag_ui_adk):
         """Test extraction of all unseen tool results when multiple exist."""
         input_data = RunAgentInput(

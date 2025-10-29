@@ -12,7 +12,7 @@ from datetime import datetime
 from ag_ui.core import (
     RunAgentInput, BaseEvent, EventType,
     RunStartedEvent, RunFinishedEvent, RunErrorEvent,
-    ToolCallEndEvent, SystemMessage,ToolCallResultEvent
+    ToolCallStartEvent, ToolCallEndEvent, SystemMessage, ToolCallResultEvent
 )
 
 from google.adk import Runner
@@ -143,6 +143,8 @@ class ADKAgent:
         # Session lookup cache for efficient session ID to metadata mapping
         # Maps session_id -> {"app_name": str, "user_id": str}
         self._session_lookup_cache: Dict[str, Dict[str, str]] = {}
+        # Track tool call names per session for matching tool results
+        self._pending_tool_call_names: Dict[str, Dict[str, str]] = {}
         
         # Event translator will be created per-session for thread safety
         
@@ -559,6 +561,13 @@ class ADKAgent:
                 else:
                     # No pending tools - this could be a stale result or from a different session
                     logger.warning(f"No pending tool calls found for tool result {tool_call_id} in thread {thread_id}")
+
+                # Clean up cached tool call name once the result is received
+                pending_names = self._pending_tool_call_names.get(thread_id)
+                if pending_names:
+                    pending_names.pop(tool_call_id, None)
+                    if not pending_names:
+                        self._pending_tool_call_names.pop(thread_id, None)
             
             # Since all tools are long-running, all tool results are standalone
             # and should start new executions with the tool results
@@ -609,6 +618,9 @@ class ADKAgent:
         for message in messages_to_check:
             if hasattr(message, 'role') and message.role == "tool":
                 tool_name = tool_call_map.get(getattr(message, 'tool_call_id', None), "unknown")
+                if tool_name == "unknown":
+                    pending_names = self._pending_tool_call_names.get(input.thread_id, {})
+                    tool_name = pending_names.get(getattr(message, 'tool_call_id', None), "unknown")
                 logger.debug(
                     "Extracted ToolMessage: role=%s, tool_call_id=%s, content='%s'",
                     getattr(message, 'role', None),
@@ -757,6 +769,17 @@ class ADKAgent:
             
             logger.debug(f"About to iterate over _stream_events for execution {execution.thread_id}")
             async for event in self._stream_events(execution):
+                if isinstance(event, ToolCallStartEvent):
+                    call_name = getattr(event, "tool_call_name", None)
+                    if call_name:
+                        pending_names = self._pending_tool_call_names.setdefault(input.thread_id, {})
+                        pending_names[event.tool_call_id] = call_name
+                        logger.debug(
+                            "Recorded tool call name mapping: %s -> %s (thread %s)",
+                            event.tool_call_id,
+                            call_name,
+                            input.thread_id,
+                        )
                 # Track tool calls for HITL scenarios
                 if isinstance(event, ToolCallEndEvent):
                     logger.info(f"Detected ToolCallEndEvent with id: {event.tool_call_id}")
@@ -768,6 +791,16 @@ class ADKAgent:
                 if isinstance(event, ToolCallResultEvent) and event.tool_call_id in tool_call_ids:
                     logger.info(f"Detected ToolCallResultEvent with id: {event.tool_call_id}")
                     tool_call_ids.remove(event.tool_call_id)
+                    pending_names = self._pending_tool_call_names.get(input.thread_id)
+                    if pending_names:
+                        pending_names.pop(event.tool_call_id, None)
+                        if not pending_names:
+                            self._pending_tool_call_names.pop(input.thread_id, None)
+                    logger.debug(
+                        "Cleared tool call name mapping for %s after result (thread %s)",
+                        event.tool_call_id,
+                        input.thread_id,
+                    )
                 
                 
                 logger.debug(f"Yielding event: {type(event).__name__}")
