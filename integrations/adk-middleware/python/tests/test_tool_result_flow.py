@@ -575,24 +575,18 @@ class TestToolResultFlow:
             async for event in ag_ui_adk.run(input_data):
                 events.append(event)
 
-        assert len(events) == 4
-        assert [event.type for event in events] == [
-            EventType.RUN_STARTED,
-            EventType.RUN_FINISHED,
-            EventType.RUN_STARTED,
-            EventType.RUN_FINISHED,
-        ]
+            assert len(events) == 2
+            assert [event.type for event in events] == [
+                EventType.RUN_STARTED,
+                EventType.RUN_FINISHED,
+            ]
 
         # First call should originate from tool processing with populated tool_results
-        assert len(start_calls) == 2
+        assert len(start_calls) == 1
         first_tool_results, first_batch = start_calls[0]
         assert first_tool_results is not None and len(first_tool_results) == 1
         assert first_tool_results[0]['message'].tool_call_id == "call_1"
         assert first_batch == [input_data.messages[0]]
-
-        second_tool_results, second_batch = start_calls[1]
-        assert second_tool_results is None
-        assert second_batch == [input_data.messages[1]]
 
         assert handle_mock.call_count == 1
         assert 'tool_messages' in handle_mock.call_args.kwargs

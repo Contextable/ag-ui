@@ -389,6 +389,7 @@ class ADKAgent:
                 ):
                     yield event
                 skip_tool_message_batch = False
+                return
             else:
                 message_batch: List[Any] = []
                 assistant_message_ids: List[str] = []
