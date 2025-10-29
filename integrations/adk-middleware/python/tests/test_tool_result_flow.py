@@ -245,44 +245,6 @@ class TestToolResultFlow:
         assert len(tool_results) == 1
         assert tool_results[0]['assistant_message'] is assistant_msg
 
-    def test_build_rehydrated_tool_call_contents(self, ag_ui_adk):
-        """Rehydrated content should include assistant function call."""
-        assistant_msg = AssistantMessage(
-            id="assistant_tool",
-            role="assistant",
-            content="Let me render that for you.",
-            tool_calls=[
-                ToolCall(
-                    id="call_render",
-                    type="function",
-                    function=FunctionCall(
-                        name="render_items_list",
-                        arguments='{"items": []}'
-                    )
-                )
-            ]
-        )
-
-        tool_msg = ToolMessage(
-            id="tool_response",
-            role="tool",
-            content='{"status": "ok"}',
-            tool_call_id="call_render"
-        )
-
-        tool_results = [{
-            'tool_name': "render_items_list",
-            'message': tool_msg,
-            'assistant_message': assistant_msg
-        }]
-
-        contents = ag_ui_adk._build_rehydrated_tool_call_contents(tool_results)
-        assert len(contents) == 1
-        content = contents[0]
-        assert getattr(content, "role", None) == "model"
-        has_function_call = any(getattr(part, "function_call", None) is not None for part in content.parts)
-        assert has_function_call
-
     @pytest.mark.asyncio
     async def test_extract_tool_results_uses_cached_tool_name(self, ag_ui_adk):
         """Fallback to cached tool name when transcript lacks tool call metadata."""
@@ -738,7 +700,7 @@ class TestToolResultFlow:
         assert len(start_calls) == 1
         first_tool_results, first_batch = start_calls[0]
         assert first_tool_results is not None
-        assert first_batch is None
+        assert first_batch == [assistant_call, tool_result]
         assert first_tool_results[0]['message'].id == "tool_result"
 
         assert pending_mock.await_count == 1
