@@ -2,7 +2,7 @@
 
 """Main ADKAgent implementation for bridging AG-UI Protocol with Google ADK."""
 
-from typing import Optional, Dict, Callable, Any, AsyncGenerator, List
+from typing import Optional, Dict, Callable, Any, AsyncGenerator, List, Union
 import time
 import json
 import asyncio
@@ -12,7 +12,8 @@ from datetime import datetime
 from ag_ui.core import (
     RunAgentInput, BaseEvent, EventType,
     RunStartedEvent, RunFinishedEvent, RunErrorEvent,
-    ToolCallStartEvent, ToolCallEndEvent, SystemMessage, ToolCallResultEvent
+    ToolCallStartEvent, ToolCallEndEvent, SystemMessage, ToolCallResultEvent,
+    Message
 )
 
 from google.adk import Runner
@@ -27,6 +28,7 @@ from google.genai import types
 
 from .event_translator import EventTranslator
 from .session_manager import SessionManager
+from .utils.converters import convert_ag_ui_messages_to_adk
 from .execution_state import ExecutionState
 from .client_proxy_toolset import ClientProxyToolset
 
@@ -607,10 +609,12 @@ class ADKAgent:
         """
         # Create a mapping of tool_call_id to tool name
         tool_call_map = {}
+        tool_call_source_map: Dict[str, Message] = {}
         for message in input.messages:
             if hasattr(message, 'tool_calls') and message.tool_calls:
                 for tool_call in message.tool_calls:
                     tool_call_map[tool_call.id] = tool_call.function.name
+                    tool_call_source_map[tool_call.id] = message
 
         messages_to_check = candidate_messages or input.messages
         extracted_results: List[Dict] = []
@@ -627,12 +631,44 @@ class ADKAgent:
                     getattr(message, 'tool_call_id', None),
                     getattr(message, 'content', None),
                 )
-                extracted_results.append({
+                extracted_result = {
                     'tool_name': tool_name,
                     'message': message
-                })
+                }
+                assistant_message = tool_call_source_map.get(getattr(message, 'tool_call_id', None))
+                if assistant_message:
+                    extracted_result['assistant_message'] = assistant_message
+                extracted_results.append(extracted_result)
 
         return extracted_results
+    
+    def _build_rehydrated_tool_call_contents(
+        self,
+        tool_results: List[Dict]
+    ) -> List[types.Content]:
+        """Recreate assistant tool-call messages for ADK using converter.
+
+        Args:
+            tool_results: Tool result entries produced by _extract_tool_results
+
+        Returns:
+            List of ADK Content payloads that represent assistant tool calls
+        """
+        assistant_messages: List[Message] = []
+        for result in tool_results:
+            assistant_msg = result.get('assistant_message')
+            if assistant_msg:
+                assistant_messages.append(assistant_msg)
+
+        if not assistant_messages:
+            return []
+
+        adk_events = convert_ag_ui_messages_to_adk(assistant_messages)
+        contents: List[types.Content] = []
+        for event in adk_events:
+            if getattr(event, "content", None):
+                contents.append(event.content)
+        return contents
 
     async def _stream_events(
         self, 
@@ -1036,8 +1072,10 @@ class ADKAgent:
             # only use this new_message if there is no tool response from the user
             new_message = await self._convert_latest_message(input, unseen_messages if message_batch is not None else None)
 
+            rehydrated_contents: List[types.Content] = []
             # if there is a tool response submission by the user then we need to only pass the tool response to the adk runner
             if active_tool_results:
+                rehydrated_contents = self._build_rehydrated_tool_call_contents(active_tool_results)
                 parts = []
                 for tool_msg in active_tool_results:
                     tool_call_id = tool_msg['message'].tool_call_id
@@ -1073,17 +1111,31 @@ class ADKAgent:
                         )
                     )
                     parts.append(updated_function_response_part)
-                new_message = types.Content(parts=parts, role='function')
+                tool_response_content = types.Content(parts=parts, role='function')
+            else:
+                tool_response_content = None
 
             # Create event translator
             event_translator = EventTranslator()
             
             # Run ADK agent
             is_long_running_tool = False
+            outgoing_messages: List[types.Content] = []
+            if rehydrated_contents:
+                outgoing_messages.extend(rehydrated_contents)
+            if tool_response_content is not None:
+                outgoing_messages.append(tool_response_content)
+            elif new_message is not None:
+                outgoing_messages.append(new_message)
+
+            runner_input: Optional[Union[types.Content, List[types.Content]]] = None
+            if outgoing_messages:
+                runner_input = outgoing_messages[0] if len(outgoing_messages) == 1 else outgoing_messages
+
             async for adk_event in runner.run_async(
                 user_id=user_id,
                 session_id=input.thread_id,
-                new_message=new_message,
+                new_message=runner_input,
                 run_config=run_config
             ):
 

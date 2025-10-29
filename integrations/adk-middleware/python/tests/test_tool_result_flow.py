@@ -199,6 +199,89 @@ class TestToolResultFlow:
         assert tool_results[0]['message'].tool_call_id == "call_1"
         assert tool_results[0]['message'].content == '{"result": "success"}'
         assert tool_results[0]['tool_name'] == "unknown"  # No tool_calls in messages
+        assert 'assistant_message' not in tool_results[0]
+
+    @pytest.mark.asyncio
+    async def test_extract_tool_results_includes_assistant_message(self, ag_ui_adk):
+        """Assistant messages that issued tool calls should be linked in results."""
+        assistant_msg = AssistantMessage(
+            id="assistant_tool",
+            role="assistant",
+            content="Let me render that for you.",
+            tool_calls=[
+                ToolCall(
+                    id="call_render",
+                    type="function",
+                    function=FunctionCall(
+                        name="render_items_list",
+                        arguments='{"items": []}'
+                    )
+                )
+            ]
+        )
+
+        tool_msg = ToolMessage(
+            id="tool_response",
+            role="tool",
+            content='{"status": "ok"}',
+            tool_call_id="call_render"
+        )
+
+        input_data = RunAgentInput(
+            thread_id="thread_1",
+            run_id="run_1",
+            messages=[
+                UserMessage(id="1", role="user", content="Show items"),
+                assistant_msg,
+                tool_msg
+            ],
+            tools=[],
+            context=[],
+            state={},
+            forwarded_props={}
+        )
+
+        tool_results = await ag_ui_adk._extract_tool_results(input_data, [tool_msg])
+        assert len(tool_results) == 1
+        assert tool_results[0]['assistant_message'] is assistant_msg
+
+    def test_build_rehydrated_tool_call_contents(self, ag_ui_adk):
+        """Rehydrated content should include assistant function call."""
+        assistant_msg = AssistantMessage(
+            id="assistant_tool",
+            role="assistant",
+            content="Let me render that for you.",
+            tool_calls=[
+                ToolCall(
+                    id="call_render",
+                    type="function",
+                    function=FunctionCall(
+                        name="render_items_list",
+                        arguments='{"items": []}'
+                    )
+                )
+            ]
+        )
+
+        tool_msg = ToolMessage(
+            id="tool_response",
+            role="tool",
+            content='{"status": "ok"}',
+            tool_call_id="call_render"
+        )
+
+        tool_results = [{
+            'tool_name': "render_items_list",
+            'message': tool_msg,
+            'assistant_message': assistant_msg
+        }]
+
+        contents = ag_ui_adk._build_rehydrated_tool_call_contents(tool_results)
+        assert len(contents) == 1
+        content = contents[0]
+        assert getattr(content, "role", None) == "model"
+        has_function_call = any(getattr(part, "function_call", None) is not None for part in content.parts)
+        assert has_function_call
 
     @pytest.mark.asyncio
     async def test_extract_tool_results_uses_cached_tool_name(self, ag_ui_adk):
