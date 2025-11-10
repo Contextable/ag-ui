@@ -1,4 +1,4 @@
-name: Manual Publish
+name: Manual Publish - Kotlin SDK
 
 on:
   workflow_dispatch:
@@ -32,12 +32,20 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up JDK 17
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
-          distribution: temurin
-          java-version: "17"
-          cache: gradle
+          java-version: "21"
+          distribution: "temurin"
+
+      # Set up the basic Android SDK tools (like sdkmanager)
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      # Use sdkmanager to install SDK 36
+      - name: Install Android SDK 36 and Build-Tools
+        run: |
+          sdkmanager "platforms;android-36" "build-tools;36.0.0"
 
       - name: Ensure scripts are executable
         working-directory: sdks/community/kotlin
