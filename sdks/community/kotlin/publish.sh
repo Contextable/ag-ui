@@ -202,7 +202,7 @@ notify_sonatype_central() {
     log "Notifying Sonatype to finalize repository ${repo_key} (POST ${notify_url})"
 
     set +e
-    curl_output=$(curl -sS -w "\nHTTP_STATUS:%{http_code}" -u "$username:$password" -X POST "$notify_url" -H "Content-Type: application/json" -d '{"publishing_type":"automatic"}' 2>&1)
+    curl_output=$(curl -sS -w "\nHTTP_STATUS:%{http_code}" -u "$username:$password" -X POST "$notify_url" -H "Content-Type: application/json" -d '{"publishing_type":"user_managed"}' 2>&1)
     curl_exit=$?
     set -e
 
