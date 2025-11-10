@@ -1,5 +1,8 @@
-// Root build script for AG-UI-4K multiplatform library
-// All modules are configured individually - see each module's build.gradle.kts
+import kotlinx.kover.gradle.plugin.dsl.KoverProjectExtension
+import org.gradle.api.publish.PublishingExtension
+import org.gradle.api.publish.maven.MavenPublication
+import org.gradle.jvm.tasks.Jar
+
 
 plugins {
     kotlin("multiplatform") version "2.2.20" apply false
@@ -18,17 +21,55 @@ allprojects {
 
 // Configure all subprojects with common settings
 subprojects {
-    group = "com.agui"
+    group = "com.contextable"
     version = "0.2.3"
 
     apply(plugin = "org.jetbrains.kotlinx.kover")
+    extensions.configure<KoverProjectExtension>("kover") {
+        currentProject {
+            instrumentation {
+                disabledForTestTasks.addAll(
+                    "jvmTest",
+                    "testDebugUnitTest",
+                    "testReleaseUnitTest"
+                )
+            }
+        }
+    }
     
     tasks.withType<Test> {
         useJUnitPlatform()
     }
-    
+
     // Apply Dokka to all subprojects
     apply(plugin = "org.jetbrains.dokka")
+
+    plugins.withId("org.jetbrains.dokka") {
+        afterEvaluate {
+            val dokkaTask = tasks.findByName("dokkaHtml") ?: tasks.findByName("dokkaGenerate")
+
+            if (dokkaTask == null) {
+                logger.warn("Dokka task not found in project ${project.name}; skipping javadocJar attachment.")
+                return@afterEvaluate
+            }
+
+            val javadocJar = tasks.register("javadocJar", Jar::class.java) {
+                dependsOn(dokkaTask)
+                archiveClassifier.set("javadoc")
+                from(dokkaTask.outputs.files)
+            }
+
+            extensions.configure(PublishingExtension::class.java) {
+                publications.withType(MavenPublication::class.java) {
+                    val attachToJvm = name.equals("jvm", ignoreCase = true) ||
+                        artifactId.orEmpty().contains("jvm", ignoreCase = true)
+                    if (attachToJvm) {
+                        artifact(javadocJar)
+                    }
+                }
+            }
+        }
+    }
 }
 
 // Simple Dokka V2 configuration - let it use defaults for navigation

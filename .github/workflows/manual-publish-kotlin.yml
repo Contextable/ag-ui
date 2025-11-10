@@ -1,0 +1,71 @@
+name: Manual Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Run publishToMavenLocal instead of publishing to OSSRH"
+        type: boolean
+        default: false
+      skip_tests:
+        description: "Skip ./gradlew clean check before publishing"
+        type: boolean
+        default: false
+      force:
+        description: "Ignore dirty worktree guard"
+        type: boolean
+        default: false
+      gradle_args:
+        description: "Additional arguments forwarded to Gradle (after the publish task)"
+        type: string
+        required: false
+        default: ""
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Ensure scripts are executable
+        working-directory: sdks/community/kotlin
+        run: chmod +x publish.sh library/gradlew
+
+      - name: Publish artifacts
+        working-directory: sdks/community/kotlin
+        env:
+          ORG_GRADLE_PROJECT_signingKey: ${{ secrets.MAVEN_SIGNING_KEY }}
+          ORG_GRADLE_PROJECT_signingPassword: ${{ secrets.MAVEN_SIGNING_PASSWORD }}
+          ORG_GRADLE_PROJECT_ossrhUsername: ${{ secrets.OSSRH_USERNAME }}
+          ORG_GRADLE_PROJECT_ossrhPassword: ${{ secrets.OSSRH_PASSWORD }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [ "${{ inputs.force }}" = "true" ]; then
+            args+=("--force")
+          fi
+          if [ "${{ inputs.skip_tests }}" = "true" ]; then
+            args+=("--skip-tests")
+          fi
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            args+=("--dry-run")
+          fi
+          extra="${{ inputs.gradle_args }}"
+          if [ -n "$extra" ]; then
+            args+=("--")
+            # shellcheck disable=SC2206
+            args+=($extra)
+          fi
+          ./publish.sh "${args[@]}"

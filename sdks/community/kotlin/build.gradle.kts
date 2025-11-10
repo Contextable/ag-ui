@@ -9,7 +9,7 @@ plugins {
     id("signing")
 }
 
-group = "com.agui"
+group = "com.contextable"
 version = "0.1.0"
 
 repositories {
@@ -190,6 +190,16 @@ publishing {
                     connection.set("scm:git:git://github.com/ag-ui-protocol/ag-ui.git")
                     developerConnection.set("scm:git:ssh://github.com:ag-ui-protocol/ag-ui.git")
                 }
+            }
+        }
+    }
+    repositories {
+        maven {
+            name = "ossrh-staging-api"
+            url = uri("https://ossrh-staging-api.central.sonatype.com/service/local/staging/deploy/maven2/")
+            credentials {
+                username = (findProperty("ossrhUsername") as String?) ?: System.getenv("OSSRH_USERNAME")
+                password = (findProperty("ossrhPassword") as String?) ?: System.getenv("OSSRH_PASSWORD")
             }
         }
     }
