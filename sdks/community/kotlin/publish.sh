@@ -201,8 +201,9 @@ notify_sonatype_central() {
     local notify_url="${SONATYPE_CENTRAL_ENDPOINT%/}/manual/upload/repository/${repo_key}"
     log "Notifying Sonatype to finalize repository ${repo_key} (POST ${notify_url})"
 
+    #Note : This will automatically publish the artifacts.  Change publishing_type to 'user_managed' if you want to review before publishing.
     set +e
-    curl_output=$(curl -sS -w "\nHTTP_STATUS:%{http_code}" -u "$username:$password" -X POST "$notify_url" -H "Content-Type: application/json" -d '{"publishing_type":"user_managed"}' 2>&1)
+    curl_output=$(curl -sS -w "\nHTTP_STATUS:%{http_code}" -u "$username:$password" -X POST "$notify_url" -H "Content-Type: application/json" -d '{"publishing_type":"automatic"}' 2>&1)
     curl_exit=$?
     set -e
 
