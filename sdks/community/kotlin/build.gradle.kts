@@ -157,65 +157,6 @@ android {
     }
 }
 
-// Publishing configuration
-publishing {
-    publications {
-        create<MavenPublication>("maven") {
-            groupId = project.group.toString()
-            artifactId = "agui4k"
-            version = project.version.toString()
-            
-            pom {
-                name.set("AGUI4K")
-                description.set("Kotlin Multiplatform implementation of the Agent User Interaction Protocol")
-                url.set("https://github.com/ag-ui-protocol/ag-ui")
-                
-                licenses {
-                    license {
-                        name.set("MIT License")
-                        url.set("https://opensource.org/licenses/MIT")
-                    }
-                }
-                
-                developers {
-                    developer {
-                        id.set("contextablemark")
-                        name.set("Mark Fogle")
-                        email.set("mark@contextable.com")
-                    }
-                }
-                
-                scm {
-                    url.set("https://github.com/ag-ui-protocol/ag-ui")
-                    connection.set("scm:git:git://github.com/ag-ui-protocol/ag-ui.git")
-                    developerConnection.set("scm:git:ssh://github.com:ag-ui-protocol/ag-ui.git")
-                }
-            }
-        }
-    }
-    repositories {
-        maven {
-            name = "ossrh-staging-api"
-            url = uri("https://ossrh-staging-api.central.sonatype.com/service/local/staging/deploy/maven2/")
-            credentials {
-                username = (findProperty("ossrhUsername") as String?) ?: System.getenv("OSSRH_USERNAME")
-                password = (findProperty("ossrhPassword") as String?) ?: System.getenv("OSSRH_PASSWORD")
-            }
-        }
-    }
-}
-
-// Signing configuration (for Maven Central)
-signing {
-    val signingKey: String? by project
-    val signingPassword: String? by project
-    
-    if (signingKey != null && signingPassword != null) {
-        useInMemoryPgpKeys(signingKey, signingPassword)
-        sign(publishing.publications)
-    }
-}
-
 tasks.withType<Test> {
     useJUnitPlatform()
 }
