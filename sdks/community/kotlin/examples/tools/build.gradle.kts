@@ -4,7 +4,7 @@ plugins {
     id("com.android.library")
 }
 
-group = "com.ag-ui.community"
+group = "com.agui.examples"
 version = "0.2.3"
 
 repositories {

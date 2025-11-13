@@ -1,20 +1,12 @@
 // Root build script for AG-UI-4K multiplatform library
 // All modules are configured individually - see each module's build.gradle.kts
 
-import kotlinx.kover.gradle.plugin.dsl.KoverProjectExtension
-import org.gradle.api.publish.PublishingExtension
-import org.gradle.api.publish.maven.MavenPublication
-import org.gradle.jvm.tasks.Jar
-import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget
-import org.jetbrains.kotlin.gradle.targets.jvm.KotlinJvmTarget
-
 plugins {
     kotlin("multiplatform") version "2.2.20" apply false
     kotlin("plugin.serialization") version "2.2.20" apply false
     id("com.android.library") version "8.10.1" apply false
     id("org.jetbrains.dokka") version "2.0.0"
     id("org.jetbrains.kotlinx.kover") version "0.8.3"
-    id("org.jreleaser") version "1.17.0"
 }
 
 allprojects {
@@ -26,54 +18,17 @@ allprojects {
 
 // Configure all subprojects with common settings
 subprojects {
-    group = "com.contextable"
+    group = "com.agui"
     version = "0.2.3"
 
     apply(plugin = "org.jetbrains.kotlinx.kover")
-    extensions.configure<KoverProjectExtension>("kover") {
-        currentProject {
-            instrumentation {
-                disabledForTestTasks.addAll(
-                    "jvmTest",
-                    "testDebugUnitTest",
-                    "testReleaseUnitTest"
-                )
-            }
-        }
-    }
-
+    
     tasks.withType<Test> {
         useJUnitPlatform()
     }
     
     // Apply Dokka to all subprojects
     apply(plugin = "org.jetbrains.dokka")
-        plugins.withId("org.jetbrains.dokka") {
-        afterEvaluate {
-            val dokkaTask = tasks.findByName("dokkaHtml") ?: tasks.findByName("dokkaGenerate")
-
-            if (dokkaTask == null) {
-                logger.warn("Dokka task not found in project ${project.name}; skipping javadocJar attachment.")
-                return@afterEvaluate
-            }
-
-            val javadocJar = tasks.register("javadocJar", Jar::class.java) {
-                dependsOn(dokkaTask)
-                archiveClassifier.set("javadoc")
-                from(dokkaTask.outputs.files)
-            }
-
-            extensions.configure(PublishingExtension::class.java) {
-                publications.withType(MavenPublication::class.java) {
-                    val attachToJvm = name.equals("jvm", ignoreCase = true) ||
-                        artifactId.orEmpty().contains("jvm", ignoreCase = true)
-                    if (attachToJvm) {
-                        artifact(javadocJar)
-                    }
-                }
-            }
-        }
-    }
 }
 
 // Simple Dokka V2 configuration - let it use defaults for navigation
@@ -148,75 +103,5 @@ tasks.register("dokkaHtmlMultiModule") {
         }
         
         println("Unified documentation generated at: ${outputDir.absolutePath}/index.html")
-    }
-}
-
-// JReleaser configuration for publishing to Maven Central
-jreleaser {
-    // Enable GPG signing for all artifacts
-    signing {
-        active.set(org.jreleaser.model.Active.ALWAYS)
-        armored.set(true)
-    }
-
-    // Configure Maven Central deployment
-    deploy {
-        maven {
-            mavenCentral {
-                create("sonatype") {
-                    active.set(org.jreleaser.model.Active.ALWAYS)
-                    url.set("https://central.sonatype.com/api/v1/publisher")
-                    stagingRepository("build/staging-deploy")
-
-                    // Sign and verify artifacts
-                    sign.set(true)
-                    checksums.set(true)
-                    sourceJar.set(true)
-                    javadocJar.set(true)
-                }
-            }
-        }
-    }
-}
-
-// Configure artifact overrides after all subprojects are evaluated
-// Workaround for Kotlin Multiplatform iOS targets that produce .klib files instead of JARs
-afterEvaluate {
-    // Collect all iOS target publications from subprojects
-    val iosArtifactIds = mutableListOf<String>()
-
-    subprojects {
-        plugins.withId("org.jetbrains.kotlin.multiplatform") {
-            extensions.configure(org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension::class.java) {
-                targets.forEach { target ->
-                    // Collect non-JVM target artifact IDs
-                    if (target !is KotlinJvmTarget) {
-                        iosArtifactIds.add("${project.name}-${target.name.lowercase()}")
-                    }
-                }
-            }
-        }
-    }
-
-    // Configure JReleaser artifact overrides for iOS targets
-    jreleaser {
-        deploy {
-            maven {
-                mavenCentral {
-                    named("sonatype") {
-                        // Add artifact override for each iOS target
-                        iosArtifactIds.forEach { artifactId ->
-                            artifactOverride {
-                                this.artifactId.set(artifactId)
-                                jar.set(false)
-                                verifyPom.set(false)
-                                sourceJar.set(false)
-                                javadocJar.set(false)
-                            }
-                        }
-                    }
-                }
-            }
-        }
     }
 }
