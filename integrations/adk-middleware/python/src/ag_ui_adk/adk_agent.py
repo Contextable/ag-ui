@@ -410,15 +410,33 @@ class ADKAgent:
                         assistant_message_ids,
                     )
 
-                if not message_batch:
+                next_role = (
+                    getattr(unseen_messages[index], "role", None)
+                    if index < total_unseen
+                    else None
+                )
+                has_upcoming_tool_batch = next_role == "tool"
+
+                if message_batch:
+                    if assistant_message_ids and has_upcoming_tool_batch:
+                        message_ids = self._collect_message_ids(message_batch)
+                        if message_ids:
+                            self._session_manager.mark_messages_processed(
+                                app_name,
+                                input.thread_id,
+                                message_ids,
+                            )
+                        skip_tool_message_batch = True
+                        continue
+
+                    skip_tool_message_batch = False
+
+                    async for event in self._start_new_execution(input, message_batch=message_batch):
+                        yield event
+                else:
                     if assistant_message_ids:
                         skip_tool_message_batch = True
                     continue
-                else:
-                    skip_tool_message_batch = False
-
-                async for event in self._start_new_execution(input, message_batch=message_batch):
-                    yield event
     
     async def _ensure_session_exists(self, app_name: str, user_id: str, session_id: str, initial_state: dict):
         """Ensure a session exists, creating it if necessary via session manager."""
