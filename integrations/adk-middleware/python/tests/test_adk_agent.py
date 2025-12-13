@@ -731,4 +731,73 @@ class TestADKAgent:
         # Verify the SystemMessage became the instruction
         assert captured_agent.instruction == "You are a math tutor."
 
+    @pytest.mark.asyncio
+    async def test_final_response_after_backend_tool_emits_text(self, adk_agent, sample_input):
+        """Test that final response with content after backend tool is properly emitted.
+
+        This is a regression test for issue #796: when a backend (non-LRO) tool completes
+        and the model generates a final response with finish_reason set, the text content
+        must still be translated and emitted to the client.
+
+        Previously, the condition excluded events with finish_reason set, causing them to
+        go through translate_lro_function_calls() which silently dropped the text content.
+        """
+        translate_calls = 0
+        lro_calls = 0
+
+        async def fake_translate(self, adk_event, thread_id, run_id):
+            nonlocal translate_calls
+            translate_calls += 1
+            yield TextMessageContentEvent(
+                type=EventType.TEXT_MESSAGE_CONTENT,
+                message_id="msg-final",
+                delta="Final response after tool"
+            )
+
+        async def fake_translate_lro(self, adk_event):
+            nonlocal lro_calls
+            lro_calls += 1
+            if False:
+                yield  # pragma: no cover - keeps this an async generator
+
+        # Simulate a final response after backend tool completion:
+        # - is_final_response() = True
+        # - finish_reason = "STOP"
+        # - has_content = True
+        # - NO long_running_tool_ids (it was a backend tool, not client/LRO tool)
+        final_event = SimpleNamespace(
+            id="event-final-after-backend-tool",
+            author="assistant",
+            content=SimpleNamespace(parts=[SimpleNamespace(text="The weather in NYC is 72°F")]),
+            partial=False,
+            turn_complete=True,
+            usage_metadata={"tokens": 10},
+            finish_reason="STOP",
+            actions=None,
+            custom_data=None,
+            long_running_tool_ids=[],  # No LRO tools - this was a backend tool
+            get_function_calls=lambda: [],
+            get_function_responses=lambda: [],
+            is_final_response=lambda: True
+        )
+
+        class FakeRunner:
+            async def run_async(self, *args, **kwargs):
+                yield final_event
+
+        with patch("ag_ui_adk.adk_agent.EventTranslator.translate", new=fake_translate), \
+             patch("ag_ui_adk.adk_agent.EventTranslator.translate_lro_function_calls", new=fake_translate_lro), \
+             patch.object(adk_agent, "_create_runner", return_value=FakeRunner()):
+            events = [event async for event in adk_agent.run(sample_input)]
+
+        # The key assertion: translate() should be called (not translate_lro_function_calls)
+        # This means the text content is properly emitted
+        assert translate_calls == 1, f"Expected translate() to be called once, got {translate_calls}"
+        assert lro_calls == 0, f"Expected translate_lro_function_calls() not to be called, got {lro_calls}"
+
+        # Verify we got the text content event
+        content_events = [e for e in events if isinstance(e, TextMessageContentEvent)]
+        assert len(content_events) == 1, "Expected one TextMessageContentEvent"
+        assert content_events[0].delta == "Final response after tool"
+
 
