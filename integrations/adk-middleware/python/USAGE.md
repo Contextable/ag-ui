@@ -235,6 +235,82 @@ add_adk_fastapi_endpoint(app, technical_agent_wrapper, path="/agents/technical")
 add_adk_fastapi_endpoint(app, creative_agent_wrapper, path="/agents/creative")
 ```
 
+### Example: wrap an existing ADK agent
+
+The middleware does not accept model/tool/instruction parameters directly—configure them on your ADK agent first, then pass the fully built agent into `ADKAgent`. The haiku generator example server demonstrates this pattern end-to-end:
+
+```python
+from ag_ui_adk import ADKAgent, add_adk_fastapi_endpoint
+from fastapi import FastAPI
+from google.adk.agents import Agent
+from google.genai import types
+
+haiku_generator_agent = Agent(
+    model="gemini-2.5-flash",
+    name="haiku_generator_agent",
+    instruction="""
+        You are an expert haiku generator that creates beautiful Japanese haiku poems
+        and their English translations. You also have the ability to select relevant
+        images that complement the haiku's theme and mood.
+    """,
+    generate_content_config=types.GenerateContentConfig(
+        temperature=0.7,
+        top_p=0.9,
+        top_k=40,
+    ),
+)
+
+adk_agent = ADKAgent(
+    adk_agent=haiku_generator_agent,  # Pre-configured ADK agent instance
+    app_name="demo_app",
+    user_id="demo_user",
+    session_timeout_seconds=3600,
+    use_in_memory_services=True,
+)
+
+app = FastAPI(title="ADK Middleware Tool Based Generative UI")
+add_adk_fastapi_endpoint(app, adk_agent, path="/")
+```
+
+You can run this example directly from `examples/server/api/tool_based_generative_ui.py` to see how the wrapped agent preserves your model and instruction choices while the middleware handles AG-UI protocol translation.
+
+### Example: include ADK agent plugins
+
+`ADKAgent` forwards any plugins you attach to the underlying ADK agent. Configure the plugins on the ADK side, then wrap the agent as usual:
+
+```python
+from ag_ui_adk import ADKAgent
+from google.adk import plugins as adk_plugins
+from google.adk.agents import Agent
+
+
+class AuditTrailPlugin(adk_plugins.Plugin):
+    """Example plugin that logs the model request and response."""
+
+    async def before_run(self, context):
+        request = context.run_config.model_request
+        print(f"[audit] user={context.user_id} model_request={request}")
+
+    async def after_run(self, context, result):
+        print(f"[audit] completion tokens={result.metrics.get('completion_tokens', 0)}")
+
+
+haiku_generator_agent = Agent(
+    model="gemini-2.5-flash",
+    name="haiku_generator_agent",
+    instruction="Write seasonal haiku and return both Japanese and English lines.",
+    plugins=[AuditTrailPlugin()],  # Plugins are configured on the ADK agent itself
+)
+
+adk_agent = ADKAgent(
+    adk_agent=haiku_generator_agent,
+    app_name="demo_app",
+    user_id="demo_user",
+)
+```
+
+The middleware does not need to know about `plugins`—they are invoked by the ADK runtime because they are attached to your base agent.
+
 ## Event Translation
 
 The middleware translates between AG-UI and ADK event formats:
