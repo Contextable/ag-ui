@@ -1,0 +1,18 @@
+# A2A Middleware Example Agents - Python Dependencies
+
+# Core A2A SDK
+a2a-sdk>=0.2.0
+
+# LLM Client
+openai>=1.0.0
+
+# Web Server
+uvicorn>=0.29.0
+fastapi>=0.111.0
+
+# For orchestrator agent (ADK-based)
+ag-ui-adk>=0.0.1
+google-adk>=0.2.0
+
+# Environment variables
+python-dotenv>=1.0.0
