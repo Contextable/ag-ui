@@ -1,73 +1,120 @@
 # Deep Search POC - Architecture Diagrams
 
-## 1. User Journey Flow
+## 1. User Journey Flow with 5 HITL Checkpoints
 
 ```mermaid
 sequenceDiagram
     participant U as User
     participant F as Frontend (CopilotKit)
-    participant B as Backend (ADK)
+    participant B as Backend (ADK + AGUIToolset)
     participant G as Gemini API
     participant S as Google Search
 
     U->>F: Enter research topic
-    F->>B: Send message via AG-UI
+    F->>B: Send message via AG-UI (with 5 HITL tools)
     B->>G: Generate research plan
     G-->>B: Plan with objectives
-    B->>F: STATE_DELTA (phase: awaiting_approval)
-    B->>F: TOOL_CALL (approve_research_plan)
 
-    Note over F: Plan Approval UI appears
+    rect rgb(200, 230, 201)
+        Note over F,B: HITL #1: Plan Approval (Root Agent)
+        B->>F: TOOL_CALL (approve_research_plan)
+        Note over F: PlanApproval UI appears
+        U->>F: Modify objectives, approve
+        F->>B: TOOL_RESULT (approved: true, plan)
+    end
 
-    U->>F: Modify and approve plan
-    F->>B: TOOL_RESULT (approved: true, plan)
+    B->>G: Generate report outline
 
-    loop For each section
-        B->>G: Generate section outline
-        B->>S: Execute searches
-        S-->>B: Search results
-        B->>F: STATE_DELTA (sources updated)
+    rect rgb(200, 230, 201)
+        Note over F,B: HITL #2: Outline Review (section_planner)
+        B->>F: TOOL_CALL (review_outline)
+        Note over F: OutlineReview UI appears
+        U->>F: Reorder sections, approve
+        F->>B: TOOL_RESULT (approved: true, outline)
+    end
 
-        loop Refinement (max 3 iterations)
-            B->>G: Evaluate research quality
-            alt Grade < B
-                B->>S: Additional searches
-                S-->>B: More results
-            else Grade >= B
-                Note over B: Escalate to next phase
+    B->>S: Execute searches
+    S-->>B: Search results
+    B->>F: STATE_DELTA (sources updated)
+
+    rect rgb(200, 230, 201)
+        Note over F,B: HITL #3: Source Verification (section_researcher)
+        B->>F: TOOL_CALL (verify_sources)
+        Note over F: SourceVerification UI appears
+        U->>F: Accept/reject sources
+        F->>B: TOOL_RESULT (accepted_sources, guidance)
+    end
+
+    loop Refinement (max 3 iterations)
+        B->>G: Evaluate research quality
+        alt Grade < B
+            rect rgb(200, 230, 201)
+                Note over F,B: HITL #4: Refinement Guidance (research_evaluator)
+                B->>F: TOOL_CALL (guide_refinement)
+                Note over F: RefinementGuidance UI appears
+                U->>F: Select queries, add guidance
+                F->>B: TOOL_RESULT (continue: true, queries)
             end
+            B->>S: Additional searches
+            S-->>B: More results
+        else Grade >= B
+            Note over B: Escalate to composition
         end
     end
 
     B->>G: Compose final report
     G-->>B: Report with citations
+
+    rect rgb(200, 230, 201)
+        Note over F,B: HITL #5: Draft Review (report_composer)
+        B->>F: TOOL_CALL (review_draft)
+        Note over F: DraftReview UI appears
+        U->>F: Review, approve
+        F->>B: TOOL_RESULT (approved: true)
+    end
+
     B->>F: TEXT_MESSAGE (final report)
     B->>F: STATE_DELTA (phase: complete)
 ```
 
-## 2. Agent Hierarchy
+## 2. Agent Hierarchy with AGUIToolset (PR #904)
 
 ```mermaid
 graph TB
     subgraph Root["interactive_planner_agent"]
         direction TB
         P[Plan Generation]
-        HITL[Human-in-the-Loop Approval]
+        HITL1["HITL #1: approve_research_plan"]
+        TS1["AGUIToolset(filter=['approve_research_plan'])"]
     end
 
     subgraph Pipeline["research_pipeline (Sequential)"]
         direction TB
-        SP[section_planner]
-        SR[section_researcher]
+
+        subgraph SP["section_planner"]
+            HITL2["HITL #2: review_outline"]
+            TS2["AGUIToolset(filter=['review_outline'])"]
+        end
+
+        subgraph SR["section_researcher"]
+            HITL3["HITL #3: verify_sources"]
+            TS3["AGUIToolset(filter=['verify_sources'])"]
+        end
 
         subgraph Loop["iterative_refinement_loop"]
             direction TB
-            RE[research_evaluator]
+            subgraph RE["research_evaluator"]
+                HITL4["HITL #4: guide_refinement"]
+                TS4["AGUIToolset(filter=['guide_refinement'])"]
+            end
             EC[escalation_checker]
             ES[enhanced_search_executor]
         end
 
-        RC[report_composer]
+        subgraph RC["report_composer"]
+            HITL5["HITL #5: review_draft"]
+            TS5["AGUIToolset(filter=['review_draft'])"]
+        end
     end
 
     Root --> Pipeline
@@ -82,6 +129,11 @@ graph TB
     style Root fill:#e1f5fe
     style Pipeline fill:#f3e5f5
     style Loop fill:#fff3e0
+    style HITL1 fill:#c8e6c9
+    style HITL2 fill:#c8e6c9
+    style HITL3 fill:#c8e6c9
+    style HITL4 fill:#c8e6c9
+    style HITL5 fill:#c8e6c9
 ```
 
 ## 3. State Flow
@@ -154,7 +206,7 @@ stateDiagram-v2
     Complete --> [*]
 ```
 
-## 5. Component Architecture
+## 5. Component Architecture with All HITL Components
 
 ```mermaid
 graph TB
@@ -168,15 +220,25 @@ graph TB
         SS[SourceSidebar]
     end
 
-    subgraph Chat Components
+    subgraph "HITL Components (rendered by useHumanInTheLoop)"
+        PA["PlanApproval (HITL #1)"]
+        OR["OutlineReview (HITL #2)"]
+        SV["SourceVerification (HITL #3)"]
+        RG["RefinementGuidance (HITL #4)"]
+        DR["DraftReview (HITL #5)"]
+    end
+
+    subgraph "Chat Components"
         CC[CopilotChat]
-        PA[PlanApproval]
         CM[CitationMessage]
     end
 
-    subgraph Hooks
-        URS[useResearchState]
-        UHITL[useHumanInTheLoop]
+    subgraph "Hooks (5 useHumanInTheLoop calls)"
+        UHITL1["useHumanInTheLoop('approve_research_plan')"]
+        UHITL2["useHumanInTheLoop('review_outline')"]
+        UHITL3["useHumanInTheLoop('verify_sources')"]
+        UHITL4["useHumanInTheLoop('guide_refinement')"]
+        UHITL5["useHumanInTheLoop('review_draft')"]
         UCS[useCoagentState]
     end
 
@@ -186,14 +248,23 @@ graph TB
     Layout --> SS
 
     Chat --> CC
-    Chat --> PA
     Chat --> CM
 
-    TL --> URS
-    SS --> URS
-    PA --> UHITL
+    UHITL1 --> PA
+    UHITL2 --> OR
+    UHITL3 --> SV
+    UHITL4 --> RG
+    UHITL5 --> DR
+
+    TL --> UCS
+    SS --> UCS
     CM --> UCS
-    URS --> UCS
+
+    style PA fill:#c8e6c9
+    style OR fill:#c8e6c9
+    style SV fill:#c8e6c9
+    style RG fill:#c8e6c9
+    style DR fill:#c8e6c9
 ```
 
 ## 6. Event Timeline
@@ -272,7 +343,50 @@ erDiagram
     }
 ```
 
-## 8. Deployment Architecture
+## 8. AGUIToolset Mechanism (PR #904)
+
+This diagram shows how AGUIToolset enables HITL tools to be available to sub-agents.
+
+```mermaid
+sequenceDiagram
+    participant FE as Frontend
+    participant RT as CopilotKit Runtime
+    participant MW as ADK Middleware
+    participant RA as Root Agent
+    participant SA as Sub-Agent
+
+    Note over FE: Register 5 useHumanInTheLoop hooks
+
+    FE->>RT: Register tools via hooks
+    RT->>MW: RunAgentInput.tools = [5 HITL tools]
+
+    Note over MW: AGUIToolset created for each agent
+
+    MW->>RA: Inject AGUIToolset(filter=['approve_research_plan'])
+    MW->>SA: Inject AGUIToolset(filter=['review_outline', 'verify_sources', ...])
+
+    Note over RA,SA: Each agent only sees filtered tools
+
+    RA->>MW: Call approve_research_plan
+    MW->>RT: TOOL_CALL event
+    RT->>FE: Render PlanApproval
+    FE->>RT: TOOL_RESULT
+    RT->>MW: Continue execution
+    MW->>RA: Tool result
+
+    Note over RA: Delegates to sub-agent
+
+    SA->>MW: Call review_outline (sub-agent!)
+    MW->>RT: TOOL_CALL event
+    RT->>FE: Render OutlineReview
+    FE->>RT: TOOL_RESULT
+    RT->>MW: Continue execution
+    MW->>SA: Tool result
+```
+
+**Key Insight**: Without PR #904, only the root agent could access frontend tools. With `AGUIToolset`, each agent explicitly declares which tools it needs via `tool_filter`, enabling HITL at any level of the hierarchy.
+
+## 9. Deployment Architecture
 
 ```mermaid
 graph TB
