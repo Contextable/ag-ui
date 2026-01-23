@@ -1688,7 +1688,8 @@ class ADKAgent:
                             logger.debug(f"Event queued (LRO text): {type(ag_ui_event).__name__} (thread {input.thread_id})")
 
                     # Ensure any active streaming text message is closed BEFORE tool calls
-                    async for end_event in event_translator.force_close_streaming_message():
+                    # Pass run_id for overlap detection after force-close (GitHub #984)
+                    async for end_event in event_translator.force_close_streaming_message(run_id=input.run_id):
                         await event_queue.put(end_event)
                         logger.debug(f"Event queued (forced close): {type(end_event).__name__} (thread {input.thread_id}, queue size after: {event_queue.qsize()})")
 
@@ -1704,7 +1705,8 @@ class ADKAgent:
                         return
 
             # Force close any streaming messages
-            async for ag_ui_event in event_translator.force_close_streaming_message():
+            # Pass run_id for overlap detection after force-close (GitHub #984)
+            async for ag_ui_event in event_translator.force_close_streaming_message(run_id=input.run_id):
                 await event_queue.put(ag_ui_event)
             # moving states snapshot events after the text event clousure to avoid this error https://github.com/Contextable/ag-ui/issues/28
             final_state = await self._session_manager.get_session_state(backend_session_id, app_name, user_id)

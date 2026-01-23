@@ -184,6 +184,7 @@ class EventTranslator:
         self._current_stream_text: str = ""  # Accumulates text for the active stream
         self._last_streamed_text: Optional[str] = None  # Snapshot of most recently streamed text
         self._last_streamed_run_id: Optional[str] = None  # Run identifier for the last streamed text
+        self._force_closed: bool = False  # Flag to track if last stream was force-closed (GitHub #984)
         self.long_running_tool_ids: List[str] = []  # Track the long running tool IDs
 
         # Track thinking message streaming state (for thought parts)
@@ -295,7 +296,8 @@ class EventTranslator:
                         logger.debug(f"ADK function calls detected (non-LRO): {len(non_lro_calls)} of {len(function_calls)} total")
                         # CRITICAL FIX: End any active text message stream before starting tool calls
                         # Per AG-UI protocol: TEXT_MESSAGE_END must be sent before TOOL_CALL_START
-                        async for event in self.force_close_streaming_message():
+                        # Pass run_id for overlap detection after force-close (GitHub #984)
+                        async for event in self.force_close_streaming_message(run_id=run_id):
                             yield event
                         
                         # Yield only non-LRO function call events
@@ -496,6 +498,47 @@ class EventTranslator:
         if not combined_text:
             return
 
+        # Check for prefix overlap after force_close (GitHub #984).
+        # When ADK sends accumulated text after a tool call interrupts the stream,
+        # the new text may start with content that was already streamed.
+        # We detect this overlap and only emit the new portion to prevent duplicates.
+        #
+        # IMPORTANT: This check ONLY runs when _force_closed is True, meaning the
+        # previous stream was interrupted by a tool call (not ended normally).
+        # This prevents false positives for normal message boundaries.
+        #
+        # We save the ORIGINAL incoming text (before trimming) to _last_streamed_text.
+        # This represents ADK's accumulated text and allows proper overlap detection
+        # when multiple tools are called in sequence.
+        # See test_multiple_tools_scenario for the full flow.
+        if (
+            self._force_closed
+            and not self._is_streaming
+            and self._last_streamed_run_id == run_id
+            and self._last_streamed_text
+            and combined_text.startswith(self._last_streamed_text)
+        ):
+            overlap_len = len(self._last_streamed_text)
+            new_content = combined_text[overlap_len:]
+
+            # Update _last_streamed_text to the FULL incoming text (the accumulated
+            # text from ADK's perspective). This is crucial for chained tool calls
+            # where each response contains the full accumulated text.
+            self._last_streamed_text = combined_text
+            # Keep _last_streamed_run_id unchanged
+
+            if not new_content:
+                # All content was already streamed, skip entirely
+                logger.info(
+                    "⏭️ Skipping accumulated text (all content already streamed after force-close)"
+                )
+                return
+            # Trim the overlapping portion and continue with only new content
+            logger.info(
+                f"⏭️ Trimmed {overlap_len} chars of overlapping content from accumulated text after force-close"
+            )
+            combined_text = new_content
+
         # Use proper ADK streaming detection (handle None values)
         is_partial = getattr(adk_event, 'partial', False)
         turn_complete = getattr(adk_event, 'turn_complete', False)
@@ -522,6 +565,8 @@ class EventTranslator:
             self._streaming_message_id = str(uuid.uuid4())
             self._is_streaming = True
             self._current_stream_text = ""
+            # Clear force_closed flag after starting new stream (overlap detection was applied above)
+            self._force_closed = False
 
             start_event = TextMessageStartEvent(
                 type=EventType.TEXT_MESSAGE_START,
@@ -886,11 +931,16 @@ class EventTranslator:
             snapshot=state_snapshot
         )
     
-    async def force_close_streaming_message(self) -> AsyncGenerator[BaseEvent, None]:
+    async def force_close_streaming_message(self, run_id: Optional[str] = None) -> AsyncGenerator[BaseEvent, None]:
         """Force close any open streaming message.
-        
+
         This should be called before ending a run to ensure proper message termination.
-        
+
+        Args:
+            run_id: Optional run ID for tracking streamed text across force-close boundaries.
+                    When provided, enables duplicate/overlap detection for accumulated text
+                    that may be sent after tool calls interrupt the stream (GitHub #984).
+
         Yields:
             TEXT_MESSAGE_END event if there was an open streaming message
         """
@@ -903,10 +953,32 @@ class EventTranslator:
             )
             yield end_event
 
-            # Reset streaming state
+            # Save streamed text for duplicate/overlap detection in subsequent messages.
+            # This is critical for preventing duplicates when ADK sends accumulated text
+            # after a tool call interrupts the stream (GitHub #984).
+            # Without this, the duplicate detection in _translate_text_content() cannot
+            # identify that new text overlaps with previously streamed content.
+            #
+            # IMPORTANT: If _last_streamed_text was already set for this run_id (e.g.,
+            # during overlap detection in _translate_text_content), we should NOT
+            # overwrite it. The overlap detection saves the FULL accumulated text from
+            # ADK, while _current_stream_text only contains the trimmed delta we emitted.
+            # Keeping the full accumulated text is essential for chained tool calls.
+            already_tracking_this_run = (
+                run_id
+                and self._last_streamed_run_id == run_id
+                and self._last_streamed_text is not None
+            )
+            if self._current_stream_text and not already_tracking_this_run:
+                self._last_streamed_text = self._current_stream_text
+                if run_id:
+                    self._last_streamed_run_id = run_id
+
+            # Reset streaming state and mark as force-closed for overlap detection
             self._current_stream_text = ""
             self._streaming_message_id = None
             self._is_streaming = False
+            self._force_closed = True  # Mark that this was a force close (GitHub #984)
             logger.info("🔄 Streaming state reset after force-close")
 
     def reset(self):
@@ -921,6 +993,7 @@ class EventTranslator:
         self._current_stream_text = ""
         self._last_streamed_text = None
         self._last_streamed_run_id = None
+        self._force_closed = False
         self.long_running_tool_ids.clear()
         self._emitted_predict_state_for_tools.clear()
         self._emitted_confirm_for_tools.clear()
