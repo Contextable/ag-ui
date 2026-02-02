@@ -20,18 +20,23 @@ from ag_ui.core import (
 
 logger = logging.getLogger(__name__)
 
-# JSON Schema meta-keys that are not supported by google.genai.types.Schema.
-# These are commonly added by MCP tool definitions and other JSON Schema generators.
+# JSON Schema keys that are NOT supported by google.genai.types.Schema.
+# MCP tool definitions commonly include these, causing Pydantic validation errors.
+#
+# Supported by Schema (do NOT strip): additionalProperties, anyOf, $defs, $ref,
+#   default, description, enum, example, format, items, maxItems, maxLength,
+#   maxProperties, maximum, minItems, minLength, minProperties, minimum, nullable,
+#   pattern, properties, propertyOrdering, required, title, type
 _UNSUPPORTED_SCHEMA_KEYS = frozenset({
-    "$schema", "$id", "$ref", "$defs", "$comment",
-    "definitions", "if", "then", "else",
-    "allOf", "anyOf", "oneOf", "not",
+    "$schema", "$id", "$comment", "$anchor", "$dynamicAnchor", "$dynamicRef",
+    "definitions",
+    "if", "then", "else",
+    "allOf", "oneOf", "not",
     "dependentRequired", "dependentSchemas",
     "prefixItems", "unevaluatedItems", "unevaluatedProperties",
     "contentEncoding", "contentMediaType", "contentSchema",
     "deprecated", "readOnly", "writeOnly",
-    "examples", "$anchor", "$dynamicAnchor", "$dynamicRef",
-    "patternProperties", "additionalProperties",
+    "examples", "patternProperties",
 })
 
 
