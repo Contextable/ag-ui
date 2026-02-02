@@ -967,6 +967,24 @@ class ADKAgent:
             return
 
         try:
+            # Ensure session cache is populated so pending tool call operations
+            # can resolve the session.  After a server restart the in-memory
+            # _session_lookup_cache is empty and _has_pending_tool_calls /
+            # _remove_pending_tool_call would silently fail, leaving
+            # pending_tool_calls stuck in session state (see issue #568).
+            if not self._get_session_metadata(thread_id):
+                user_id = self._get_user_id(input)
+                state_with_context = dict(input.state) if input.state else {}
+                try:
+                    await self._ensure_session_exists(app_name, user_id, thread_id, state_with_context)
+                except Exception as e:
+                    logger.warning(
+                        "Failed to resolve session for thread %s before pending "
+                        "tool call cleanup: %s",
+                        thread_id,
+                        e,
+                    )
+
             # Remove tool calls from pending list and track which ones we processed
             processed_tool_ids = []
             for tool_result in tool_results:

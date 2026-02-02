@@ -1392,6 +1392,142 @@ class TestClientToolResultPersistence:
             "Our append_event() fix should only apply to client-side tool results."
         )
 
+    @pytest.mark.asyncio
+    async def test_pending_tool_calls_removed_after_cache_cold_restart(self, ag_ui_adk):
+        """Test that pending_tool_calls are cleaned up even when session cache is cold.
+
+        Regression test for GitHub issue #568 (reopened).  After a server restart
+        the in-memory _session_lookup_cache is empty.  Previously,
+        _handle_tool_result_submission would silently fail to remove tool calls
+        from pending_tool_calls because _has_pending_tool_calls and
+        _remove_pending_tool_call relied on the cache to find the session.
+
+        The fix ensures the session cache is populated before attempting to
+        remove pending tool calls.
+        """
+        thread_id = "test_thread_cold_cache"
+        tool_call_id = "cold_cache_tool_call_1"
+        app_name = "test_app"
+
+        # --- Phase 1: Simulate a prior run that left pending_tool_calls ---
+        from google.adk.sessions.session import Event
+        import time
+
+        session, backend_session_id = await ag_ui_adk._ensure_session_exists(
+            app_name, "test_user", thread_id, {}
+        )
+
+        # Store a pending tool call in session state
+        await ag_ui_adk._add_pending_tool_call_with_context(
+            thread_id, tool_call_id, app_name, "test_user"
+        )
+
+        # Verify it was stored
+        pending = await ag_ui_adk._get_pending_tool_call_ids(thread_id)
+        assert tool_call_id in pending, "Tool call should be pending before restart"
+
+        # Also add the original FunctionCall event so ADK session has it
+        from google.genai import types
+        function_call_content = types.Content(
+            parts=[
+                types.Part(
+                    function_call=types.FunctionCall(
+                        id=tool_call_id,
+                        name="render_items",
+                        args={"items": ["a", "b"]}
+                    )
+                )
+            ],
+            role="model"
+        )
+        function_call_event = Event(
+            timestamp=time.time(),
+            author="test_agent",
+            content=function_call_content
+        )
+        await ag_ui_adk._session_manager._session_service.append_event(
+            session, function_call_event
+        )
+
+        # --- Phase 2: Simulate server restart by clearing the cache ---
+        ag_ui_adk._session_lookup_cache.clear()
+
+        # Verify cache is cold
+        assert ag_ui_adk._get_session_metadata(thread_id) is None, (
+            "Cache should be empty after simulated restart"
+        )
+
+        # --- Phase 3: Submit tool result with cold cache ---
+        input_data = RunAgentInput(
+            thread_id=thread_id,
+            run_id="run_2",
+            messages=[
+                UserMessage(id="user_1", role="user", content="Initial request"),
+                AssistantMessage(
+                    id="assistant_1",
+                    role="assistant",
+                    content=None,
+                    tool_calls=[
+                        ToolCall(
+                            id=tool_call_id,
+                            function=FunctionCall(
+                                name="render_items",
+                                arguments='{"items": ["a", "b"]}'
+                            )
+                        )
+                    ]
+                ),
+                ToolMessage(
+                    id="tool_1",
+                    role="tool",
+                    content='{"items": ["a", "b"], "count": 2}',
+                    tool_call_id=tool_call_id
+                ),
+            ],
+            tools=[
+                AGUITool(
+                    name="render_items",
+                    description="Render items",
+                    parameters={"type": "object", "properties": {}}
+                )
+            ],
+            context=[],
+            state={},
+            forwarded_props={}
+        )
+
+        # Mark user_1 and assistant_1 as already processed (from prior run)
+        ag_ui_adk._session_manager.mark_messages_processed(
+            app_name, thread_id, ["user_1", "assistant_1"]
+        )
+
+        # Mock _start_new_execution to avoid running real ADK
+        events_emitted = []
+
+        async def fake_start_new_execution(inp, **kwargs):
+            events_emitted.append("started")
+            yield RunStartedEvent(type=EventType.RUN_STARTED, thread_id=inp.thread_id, run_id=inp.run_id)
+            yield RunFinishedEvent(type=EventType.RUN_FINISHED, thread_id=inp.thread_id, run_id=inp.run_id)
+
+        ag_ui_adk._start_new_execution = fake_start_new_execution
+
+        # Collect all events from run()
+        events = []
+        async for event in ag_ui_adk.run(input_data):
+            events.append(event)
+
+        # --- Phase 4: Verify pending_tool_calls was cleaned up ---
+        # The cache should now be populated again
+        assert ag_ui_adk._get_session_metadata(thread_id) is not None, (
+            "Session cache should be repopulated after run()"
+        )
+
+        pending_after = await ag_ui_adk._get_pending_tool_call_ids(thread_id)
+        assert tool_call_id not in (pending_after or []), (
+            f"Tool call {tool_call_id} should have been removed from pending_tool_calls "
+            f"even after a cold cache restart. Remaining pending: {pending_after}"
+        )
+
 
 class TestDatabaseSessionServiceCompatibility:
     """Tests for DatabaseSessionService compatibility fixes.
