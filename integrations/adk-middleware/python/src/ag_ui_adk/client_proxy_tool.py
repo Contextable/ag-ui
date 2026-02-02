@@ -20,6 +20,45 @@ from ag_ui.core import (
 
 logger = logging.getLogger(__name__)
 
+# JSON Schema meta-keys that are not supported by google.genai.types.Schema.
+# These are commonly added by MCP tool definitions and other JSON Schema generators.
+_UNSUPPORTED_SCHEMA_KEYS = frozenset({
+    "$schema", "$id", "$ref", "$defs", "$comment",
+    "definitions", "if", "then", "else",
+    "allOf", "anyOf", "oneOf", "not",
+    "dependentRequired", "dependentSchemas",
+    "prefixItems", "unevaluatedItems", "unevaluatedProperties",
+    "contentEncoding", "contentMediaType", "contentSchema",
+    "deprecated", "readOnly", "writeOnly",
+    "examples", "$anchor", "$dynamicAnchor", "$dynamicRef",
+    "patternProperties", "additionalProperties",
+})
+
+
+def _strip_unsupported_schema_keys(schema: dict) -> dict:
+    """Recursively strip JSON Schema keys not supported by Gemini's Schema type.
+
+    Args:
+        schema: A JSON Schema dict (e.g. from an MCP tool definition).
+
+    Returns:
+        A new dict with unsupported keys removed at all levels.
+    """
+    result = {}
+    for key, value in schema.items():
+        if key in _UNSUPPORTED_SCHEMA_KEYS:
+            logger.debug(f"Stripping unsupported schema key: {key}")
+            continue
+        if isinstance(value, dict):
+            result[key] = _strip_unsupported_schema_keys(value)
+        elif isinstance(value, list):
+            result[key] = [
+                _strip_unsupported_schema_keys(item) if isinstance(item, dict) else item
+                for item in value
+            ]
+        else:
+            result[key] = value
+    return result
 
 
 class ClientProxyTool(BaseTool):
@@ -103,11 +142,15 @@ class ClientProxyTool(BaseTool):
         # Convert AG-UI parameters (JSON Schema) to ADK format
         parameters = self.ag_ui_tool.parameters
 
-
         # Ensure it's a proper object schema
         if not isinstance(parameters, dict):
             parameters = {"type": "object", "properties": {}}
             logger.warning(f"Tool {self.name} had non-dict parameters, using empty schema")
+
+        # Strip JSON Schema fields not supported by google.genai.types.Schema.
+        # MCP tools commonly include these meta-fields (e.g. $schema) which cause
+        # Pydantic validation errors in the Gemini SDK.
+        parameters = _strip_unsupported_schema_keys(parameters)
 
         # Create FunctionDeclaration
         function_declaration = types.FunctionDeclaration(
