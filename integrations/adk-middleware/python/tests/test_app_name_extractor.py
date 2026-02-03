@@ -129,16 +129,16 @@ async def test_default_extractor():
         forwarded_props={}
     )
 
-    # Get app name - should use agent name from registry
+    # Get app name - should use the agent name passed to ADKAgent
     app_name = adk_agent._get_app_name(test_input)
     print(f"   App name from agent: {app_name}")
 
-    # Should be the agent name from registry (test_agent)
-    if app_name == "test_agent":
+    # Should be the agent name passed to ADKAgent constructor
+    if app_name == "default_app_agent":
         print("✅ Default app extraction using agent name works correctly")
         return True
     else:
-        print(f"❌ Expected 'test_agent', got '{app_name}'")
+        print(f"❌ Expected 'default_app_agent', got '{app_name}'")
         return False
 
 async def test_conflicting_config():
