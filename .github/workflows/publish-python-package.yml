@@ -45,6 +45,9 @@ jobs:
         with:
           version: ">=0.8.0"
 
+      - name: Set up Python
+        run: uv python install 3.12
+
       - name: Install dependencies
         working-directory: ${{ inputs.package }}
         run: uv sync
