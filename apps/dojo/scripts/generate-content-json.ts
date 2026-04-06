@@ -419,6 +419,8 @@ const agentFilesMapper: Record<
   // A2A integrations use runtime-configured agents without per-feature source files
   "a2a-basic": () => ({}),
   "a2a": () => ({}),
+  // Clawg-UI is an external OpenClaw channel plugin without local source files
+  "clawg-ui": () => ({}),
   // Built-in agent with A2UI middleware - uses dedicated API route
   "builtin": () => ({}),
   "claude-agent-sdk-python": (agentKeys: string[]) => {
