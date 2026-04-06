@@ -16,7 +16,8 @@ export type Feature =
   | "a2ui_fixed_schema"
   | "a2ui_dynamic_schema"
   | "a2ui_advanced"
-  | "open_gen_ui";
+  | "open_gen_ui"
+  | "cron_report";
 
 export interface MenuIntegrationConfig {
   id: string;

@@ -24,6 +24,7 @@ type envVars = {
   claudeAgentSdkPythonUrl: string;
   claudeAgentSdkTypescriptUrl: string;
   langroidUrl: string;
+  clawgUiUrl: string;
   customDomainTitle: Record<string, string>;
 }
 
@@ -62,6 +63,7 @@ export default function getEnvVars(): envVars {
     claudeAgentSdkPythonUrl: process.env.CLAUDE_AGENT_SDK_PYTHON_URL || 'http://localhost:8019',
     claudeAgentSdkTypescriptUrl: process.env.CLAUDE_AGENT_SDK_TYPESCRIPT_URL || 'http://localhost:8020',
     langroidUrl: process.env.LANGROID_URL || 'http://localhost:8021',
+    clawgUiUrl: process.env.CLAWG_UI_URL || 'http://localhost:8022',
     customDomainTitle: customDomainTitle,
   }
 }

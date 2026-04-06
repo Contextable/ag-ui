@@ -36,7 +36,7 @@ async function getHandler(integrationId: string) {
     agents: agents as Record<string, AbstractAgent>,
     runner: new InMemoryAgentRunner(),
     a2ui: {
-      agents: ["a2ui_fixed_schema", "a2ui_dynamic_schema", "a2ui_advanced"],
+      agents: ["a2ui_fixed_schema", "a2ui_dynamic_schema", "a2ui_advanced", "cron_report"],
     },
   });
 

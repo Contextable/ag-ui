@@ -326,4 +326,12 @@ export const menuIntegrations = [
       "shared_state",
     ],
   },
+  {
+    id: "clawg-ui",
+    name: "Clawg UI",
+    features: [
+      "agentic_chat",
+      "cron_report",
+    ],
+  },
 ] as const satisfies MenuIntegrationConfig[];

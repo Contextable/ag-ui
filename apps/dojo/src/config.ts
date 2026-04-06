@@ -111,6 +111,12 @@ export const featureConfig: FeatureConfig[] = [
     description: "Agent-generated HTML/CSS/JS UIs streamed live into the chat",
     tags: ["Open Gen UI", "Sandboxed", "Streaming"],
   }),
+  createFeatureConfig({
+    id: "cron_report",
+    name: "Cron Report",
+    description: "Fixed-schema generative UI showing recent cron job results as rich cards.",
+    tags: ["A2UI", "Fixed Schema"],
+  }),
 ];
 
 export default featureConfig;

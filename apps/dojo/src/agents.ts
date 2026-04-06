@@ -397,4 +397,13 @@ export const agentsIntegrations = {
         shared_state: "shared_state",
       }
     ),
+
+  "clawg-ui": async () =>
+    mapAgents(
+      (path) => new HttpAgent({ url: `${envVars.clawgUiUrl}/${path}` }),
+      {
+        agentic_chat: "agentic_chat",
+        cron_report: "cron_report",
+      }
+    ),
 } satisfies AgentsMap;
