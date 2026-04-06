@@ -398,13 +398,20 @@ export const agentsIntegrations = {
       }
     ),
 
-  "clawg-ui": async () => ({
-    agentic_chat: new HttpAgent({
-      url: `${envVars.clawgUiUrl}/v1/clawg-ui`,
-    }),
-    cron_report: new HttpAgent({
-      url: `${envVars.clawgUiUrl}/v1/clawg-ui`,
-      headers: { "X-OpenClaw-Agent-Id": "cron-demo" },
-    }),
-  }),
+  "clawg-ui": async () => {
+    const clawgHeaders: Record<string, string> = {};
+    if (envVars.clawgUiToken) {
+      clawgHeaders["Authorization"] = `Bearer ${envVars.clawgUiToken}`;
+    }
+    return {
+      agentic_chat: new HttpAgent({
+        url: `${envVars.clawgUiUrl}/v1/clawg-ui`,
+        headers: clawgHeaders,
+      }),
+      cron_report: new HttpAgent({
+        url: `${envVars.clawgUiUrl}/v1/clawg-ui`,
+        headers: { ...clawgHeaders, "X-OpenClaw-Agent-Id": "cron-demo" },
+      }),
+    };
+  },
 } satisfies AgentsMap;
