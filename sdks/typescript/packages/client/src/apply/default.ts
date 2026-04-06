@@ -48,13 +48,16 @@ import type { Observable } from "rxjs";
 import { concatMap, defaultIfEmpty, mergeAll, mergeMap } from "rxjs/operators";
 import untruncateJson from "untruncate-json";
 import { structuredClone_ } from "../utils";
+import { type DebugLoggerInput, resolveDebugLogger } from "@/debug-logger";
 
 export const defaultApplyEvents = (
   input: RunAgentInput,
   events$: Observable<BaseEvent>,
   agent: AbstractAgent,
   subscribers: AgentSubscriber[],
+  debugLogger?: DebugLoggerInput,
 ): Observable<AgentStateMutation> => {
+  const log = resolveDebugLogger(debugLogger);
   let messages = structuredClone_(agent.messages);
   let state = structuredClone_(input.state);
   let currentMutation: AgentStateMutation = {};
@@ -91,6 +94,18 @@ export const defaultApplyEvents = (
       applyMutation(mutation);
 
       if (mutation.stopPropagation === true) {
+        log?.event("APPLY", "Event dropped:", event, {
+          type: event.type,
+          reason: "stopPropagation by subscriber",
+        });
+      } else {
+        log?.event("APPLY", "Event applied:", event, {
+          type: event.type,
+          subscribers: subscribers.length,
+        });
+      }
+
+      if (mutation.stopPropagation === true) {
         return emitUpdates();
       }
 
@@ -112,7 +127,7 @@ export const defaultApplyEvents = (
           applyMutation(mutation);
 
           if (mutation.stopPropagation !== true) {
-            const { messageId, role = "assistant" } = event as TextMessageStartEvent;
+            const { messageId, role = "assistant", name } = event as TextMessageStartEvent;
 
             // Check if a message with this ID already exists (e.g., created by TOOL_CALL_START
             // with the same parentMessageId)
@@ -125,6 +140,7 @@ export const defaultApplyEvents = (
                 id: messageId,
                 role: role,
                 content: "",
+                ...(name !== undefined && { name }),
               };
 
               // Add the new message to the messages array
@@ -524,14 +540,18 @@ export const defaultApplyEvents = (
             const { messages: newMessages } = event as MessagesSnapshotEvent;
 
             // Edit-based merge: update existing messages with snapshot data while
-            // preserving activity messages (which the backend doesn't know about).
+            // preserving activity and reasoning messages (which the backend
+            // doesn't include in the snapshot).
             const snapshotMap = new Map(newMessages.map((m) => [m.id, m]));
 
-            // Step 1 + 2: Keep activity messages as-is, keep messages present in
-            // the snapshot (replaced with snapshot version), drop everything else.
+            // Step 1 + 2: Keep activity/reasoning messages as-is, keep messages
+            // present in the snapshot (replaced with snapshot version), drop
+            // everything else.
+            const isClientOnlyRole = (role: string) =>
+              role === "activity" || role === "reasoning";
             messages = messages
-              .filter((m) => m.role === "activity" || snapshotMap.has(m.id))
-              .map((m) => (m.role === "activity" ? m : snapshotMap.get(m.id)!));
+              .filter((m) => isClientOnlyRole(m.role) || snapshotMap.has(m.id))
+              .map((m) => (isClientOnlyRole(m.role) ? m : snapshotMap.get(m.id)!));
 
             // Step 3: Append messages from the snapshot that we don't have yet.
             const existingIds = new Set(messages.map((m) => m.id));
