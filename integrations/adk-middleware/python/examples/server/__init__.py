@@ -26,6 +26,7 @@ from .api import (
     shared_state_app,
     backend_tool_rendering_app,
     predictive_state_updates_app,
+    google_workspace_app,
 )
 
 app = FastAPI(title='ADK Middleware Demo')
@@ -39,6 +40,7 @@ app.include_router(shared_state_app.router, prefix='/adk-shared-state-agent', ta
 app.include_router(backend_tool_rendering_app.router, prefix='/backend_tool_rendering', tags=['Backend Tool Rendering'])
 app.include_router(predictive_state_updates_app.router, prefix='/adk-predictive-state-agent', tags=['Predictive State Updates'])
 app.include_router(agentic_chat_reasoning_app.router, prefix='/adk-reasoning-chat', tags=['Agentic Chat Reasoning'])
+app.include_router(google_workspace_app.router, prefix='/google-workspace', tags=['Google Workspace'])
 
 
 @app.get("/")

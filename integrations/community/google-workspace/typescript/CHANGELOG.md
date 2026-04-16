@@ -1,0 +1,77 @@
+# Changelog
+
+All notable changes to `@ag-ui/google-workspace` will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Added
+
+- **Initial implementation** of the AG-UI Google Workspace Add-on — a pluggable HTTP-based Workspace Add-on that bridges any AG-UI protocol-compliant backend (LangGraph, CrewAI, Claude Agent SDK, Mastra, ADK middleware, etc.) to Gmail, Google Calendar, Google Docs, and Google Chat.
+
+- **Core**:
+  - Hono HTTP server entry point (`src/index.ts`) with health check, homepage trigger, and action routes
+  - `AgentRunner` (`src/core/agent-runner.ts`) wrapping `@ag-ui/client`'s `HttpAgent` + `defaultApplyEvents` with a client-side tool execution loop
+  - Session store abstraction (`src/core/session.ts`) with `InMemorySessionStore` (dev) and `FirestoreSessionStore` (production)
+  - Google ID token / OAuth token auth validation with cached userinfo lookup (`src/core/auth.ts`)
+  - Markdown converters for both Workspace card HTML subset (`src/core/markdown-to-html.ts`) and Google Chat's non-standard syntax (`src/core/markdown-to-chat.ts`)
+  - Card builders for conversation, settings, and HITL approval cards (`src/cards/*.ts`)
+  - Pluggable `HostAppModule` interface and registry (`src/apps/types.ts`, `src/apps/registry.ts`)
+
+- **Gmail module** (`src/apps/gmail/`):
+  - Contextual trigger with email context extraction
+  - Tools: `read_current_email`, `draft_reply`, `search_inbox`, `read_emails`
+  - Full Gmail API draft creation with proper reply threading (In-Reply-To / References headers)
+  - Compose action response with `openCreatedDraftActionMarkup` for seamless Gmail compose UI handoff
+
+- **Calendar module** (`src/apps/calendar/`):
+  - Event open trigger with context extraction (attendees, conference data, full event details via API)
+  - Tools: `read_event_details`, `add_attendee`, `update_event_description`, `update_event_title`, `get_upcoming_events`, `reschedule_event`, `create_event`
+  - Capability-aware tool exposure (e.g., `add_attendee` only when user has `canAddAttendees`)
+
+- **Docs module** (`src/apps/docs/`):
+  - File-scope-granted trigger with session-persisted doc context
+  - Tools: `read_document`, `get_document_outline`, `insert_text`, `replace_text`, `insert_after_text`, `apply_text_format`, `create_bulleted_list`
+  - Native Docs API formatting (bold/italic/underline/heading via `updateTextStyle` and `updateParagraphStyle`, bullets via `createParagraphBullets`)
+
+- **Chat module** (`src/apps/chat/`):
+  - Webhook handler for both standalone Chat app and Workspace Add-on Chat event formats
+  - Tool: `reply_in_thread`
+  - Thread-aware responses (replies stay in the originating thread)
+
+- **HITL (Human-in-the-Loop)** approval flow:
+  - Write tools pause for explicit user approval before executing
+  - Approval card renders the pending action with its parameters
+  - Approve/Reject routes handle the resumption with session context restoration (captures `gmail.messageId`, `calendar.id`, `docs.id` that Google strips from card-action events)
+  - Pending tool results deferred to the next `/actions/send` so conversation history stays consistent across action-response interruptions
+
+- **Optimistic consent pattern** (applied uniformly across Gmail, Calendar, and Docs):
+  - Tools attempt their Google API call first rather than pre-checking `authorizedScopes`
+  - On HTTP 403, the tool returns a `requesting_google_scopes` (or `requestFileScopeForActiveDocument` for Docs) action response, triggering Google's native consent prompt
+  - User's original message is preserved in `session.pendingUserMessage` across the consent interruption and pre-filled on return, so users don't have to re-type their request after granting permission
+  - Shared `withCalendarScopeFallback` / `withFileScopeFallback` wrappers centralize the 403-to-consent translation
+
+- **Deployment tooling**:
+  - `examples/deploy.sh` one-shot script to render the deployment descriptor with your URL and register/install via `gcloud workspace-add-ons`
+  - Static `examples/deployment.json` template kept in sync with the script
+  - `examples/Dockerfile` for Cloud Run deployments
+  - `examples/.env.example` documenting all required and optional environment variables (`ACTION_BASE_URL`, `AGUI_DEFAULT_BACKEND_URL`, `AGUI_ALLOWED_BACKENDS`, `INLINE_CONTEXT`, etc.)
+
+- **Documentation**:
+  - `README.md` with architecture overview, feature status, quick start, and host-app module reference
+  - `examples/DEPLOYMENT_GUIDE.md` — end-to-end deployment walkthrough covering API enablement, OAuth consent screen, Marketplace SDK configuration, OAuth client creation, descriptor deployment, and a "Common Errors" table for the gotchas hit during development
+  - Test suite with 135 tests covering core utilities, card rendering, route integration, all four host-app modules, session store, auth, and markdown conversion
+
+- **Example ADK backend** (`integrations/adk-middleware/python/examples/server/api/google_workspace.py`):
+  - Workspace-aware ADK agent using `gemini-2.0-flash` with a system prompt that explicitly handles the Workspace Add-on interaction model
+  - Detailed decision rules covering context access (`state['_ag_ui_context']`), tool selection (title vs. description edits), Chat response formatting, and clickable Gmail link emission for search results
+  - Wired into the example server at `/google-workspace` route
+
+### Known limitations
+
+- **Apps Script port is infeasible**: the current design depends on SSE streaming + async I/O, neither supported by `UrlFetchApp`. Add-on intentionally uses the HTTP add-on runtime on Cloud Run / ngrok.
+- **Workspace Add-ons cannot access highlighted text** in Docs/Sheets/Slides — agent must anchor edits by text content instead.
+- **30-second sidebar response timeout** — long-running agent workflows are planned for future work via Cloud Tasks + a Refresh button (not yet implemented).
+- **A2UI rendering** — rich card output for backends using `@ag-ui/a2ui-middleware` is planned but not yet implemented.

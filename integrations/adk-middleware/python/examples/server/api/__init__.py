@@ -8,6 +8,7 @@ from .shared_state import app as shared_state_app
 from .predictive_state_updates import app as predictive_state_updates_app
 from .backend_tool_rendering import app as backend_tool_rendering_app
 from .agentic_chat_reasoning import app as agentic_chat_reasoning_app
+from .google_workspace import app as google_workspace_app
 
 __all__ = [
     "agentic_chat_app",
@@ -18,4 +19,5 @@ __all__ = [
     "shared_state_app",
     "predictive_state_updates_app",
     "backend_tool_rendering_app",
+    "google_workspace_app",
 ]
