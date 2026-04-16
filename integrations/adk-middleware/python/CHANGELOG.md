@@ -49,6 +49,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **NEW**: Optional `save_session_to_memory_per_turn` parameter for `ADKAgent` and `SessionManager`
+  - When `True`, the session is flushed to the configured memory service (`add_session_to_memory`) after every run completes, in addition to the existing on-cleanup save
+  - Enables cross-session memory sharing in near-real-time — e.g., a multi-surface add-on where each surface has its own session but all share a `(app_name, user_id)` memory bucket via `PreloadMemoryTool`
+  - Opt-in via `save_session_to_memory_per_turn=True` on `ADKAgent()`; defaults to `False` to preserve existing behavior
+  - Adds a public `SessionManager.save_session_to_memory(app_name, user_id, thread_id)` method that resolves the session via `use_thread_id_as_session_id` direct lookup or `_find_session_by_thread_id` scan
+  - When resolving via `_find_session_by_thread_id` (the scan path), re-fetches the located session via `get_session(session.id, ...)` before handing it to `add_session_to_memory` — `list_sessions` strips events for efficiency, so the scan-located session would otherwise be flushed with zero events
+  - 7 new unit tests in `tests/test_session_memory.py`
+
 - **NEW**: LLMock test infrastructure to run integration tests without `GOOGLE_API_KEY`
   - Uses `@copilotkit/aimock` (LLMock) to mock Gemini API responses via `GOOGLE_GEMINI_BASE_URL`
   - Session-scoped pytest fixture auto-starts a Node.js LLMock server when no real API key is present

@@ -1,0 +1,39 @@
+[project]
+name = "ag-ui-google-workspace-agent"
+version = "0.1.0"
+description = "AG-UI backend agent for the Google Workspace Add-on. An ADK-based assistant with cross-surface memory for Gmail, Calendar, Docs, and Chat."
+authors = [
+    { name = "AG-UI Protocol Contributors" },
+]
+readme = "README.md"
+requires-python = ">=3.10,<3.14"
+dependencies = [
+    "ag-ui-adk",
+    "google-adk>=1.30.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "python-dotenv>=1.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+]
+
+[tool.uv.sources]
+ag-ui-adk = { path = "../../../adk-middleware/python", editable = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ag_ui_google_workspace_agent"]
+
+[project.scripts]
+ag-ui-google-workspace-agent = "ag_ui_google_workspace_agent.server:main"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

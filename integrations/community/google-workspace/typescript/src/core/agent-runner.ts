@@ -15,6 +15,33 @@ import type { HostAppModule, WorkspaceEvent, ToolResult, HostApp } from "../type
 const MAX_TOOL_LOOPS = 10;
 const AGENT_TIMEOUT_MS = 30_000;
 
+/**
+ * Canonical Context entry description used to carry the authenticated
+ * user's email to the backend agent. The Python-side
+ * `extract_user_email` extractor looks for an entry with this exact
+ * description; see `integrations/community/google-workspace/python`.
+ */
+export const USER_EMAIL_CONTEXT_KEY = "user_email";
+
+/**
+ * Build the outgoing context array for a request: prepend a user_email
+ * entry (if a userId was provided) and drop entries with missing/empty
+ * values (which would 422 at the Pydantic layer).
+ *
+ * Exported for testing.
+ */
+export function buildOutgoingContext(
+  context: Context[],
+  userId?: string,
+): Context[] {
+  const withUser: Context[] = userId
+    ? [{ description: USER_EMAIL_CONTEXT_KEY, value: userId }, ...context]
+    : context;
+  return withUser.filter(
+    (c) => c.value !== undefined && c.value !== null && c.value !== "",
+  );
+}
+
 export interface AgentRunResult {
   /** The agent's final text response (last assistant message content) */
   responseText: string;
@@ -53,6 +80,14 @@ export interface RunAgentOptions {
   previousMessages?: Message[];
   /** Function to check if a tool is a write tool (requires HITL approval) */
   isWriteTool?: (toolName: string) => boolean;
+  /**
+   * Authenticated user's email. Injected as a `user_email` Context entry
+   * so the backend agent can set its ADK user_id and share memory across
+   * Workspace surfaces for the same user. Required for any backend that
+   * relies on per-user memory isolation; the Python workspace agent
+   * refuses requests without it.
+   */
+  userId?: string;
 }
 
 /**
@@ -114,11 +149,10 @@ export async function runAgent(opts: RunAgentOptions): Promise<AgentRunResult> {
   while (loopCount < MAX_TOOL_LOOPS) {
     loopCount++;
 
-    // Filter out context entries with missing/empty values — Pydantic
-    // requires `value` to be a non-null string and will 422 the request.
-    const cleanContext = opts.context.filter(
-      (c) => c.value !== undefined && c.value !== null && c.value !== "",
-    );
+    // Prepend the authenticated user's email as a canonical context entry
+    // so the backend can extract a stable user_id for per-user memory.
+    // Drops entries with missing/empty values (Pydantic 422 otherwise).
+    const cleanContext = buildOutgoingContext(opts.context, opts.userId);
 
     const input: RunAgentInput = {
       threadId: opts.threadId,

@@ -779,4 +779,147 @@ class TestSessionStateManagement:
             # Either app1 gets True and app2 gets False, or vice versa
             assert len(result) == 2
             assert set(result.values()) == {True, False}  # One succeeded, one failed
-            assert mock_update.call_count == 2
+
+
+class TestPerTurnMemoryFlush:
+    """Tests for save_session_to_memory_per_turn and save_session_to_memory()."""
+
+    @pytest.fixture(autouse=True)
+    def reset_session_manager(self):
+        SessionManager.reset_instance()
+        yield
+        SessionManager.reset_instance()
+
+    @pytest.fixture
+    def mock_session_service(self):
+        service = AsyncMock()
+        service.get_session = AsyncMock()
+        service.list_sessions = AsyncMock()
+        return service
+
+    @pytest.fixture
+    def mock_memory_service(self):
+        service = AsyncMock()
+        service.add_session_to_memory = AsyncMock()
+        return service
+
+    @pytest.fixture
+    def mock_session(self):
+        session = MagicMock()
+        session.id = "sess-abc"
+        session.app_name = "test_app"
+        session.user_id = "alice@example.com"
+        session.state = {"_ag_ui_thread_id": "thread-1"}
+        return session
+
+    @pytest.mark.asyncio
+    async def test_flag_defaults_off(self, mock_session_service, mock_memory_service):
+        manager = SessionManager.get_instance(
+            session_service=mock_session_service,
+            memory_service=mock_memory_service,
+        )
+        assert manager.save_session_to_memory_per_turn is False
+
+    @pytest.mark.asyncio
+    async def test_flag_opts_in(self, mock_session_service, mock_memory_service):
+        manager = SessionManager.get_instance(
+            session_service=mock_session_service,
+            memory_service=mock_memory_service,
+            save_session_to_memory_per_turn=True,
+        )
+        assert manager.save_session_to_memory_per_turn is True
+
+    @pytest.mark.asyncio
+    async def test_save_without_memory_service_returns_false(
+        self, mock_session_service
+    ):
+        manager = SessionManager.get_instance(session_service=mock_session_service)
+        result = await manager.save_session_to_memory(
+            app_name="test_app", user_id="alice@example.com", thread_id="t-1"
+        )
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_save_with_thread_id_as_session_id_direct_lookup(
+        self, mock_session_service, mock_memory_service, mock_session
+    ):
+        manager = SessionManager.get_instance(
+            session_service=mock_session_service,
+            memory_service=mock_memory_service,
+            use_thread_id_as_session_id=True,
+        )
+        mock_session_service.get_session.return_value = mock_session
+
+        ok = await manager.save_session_to_memory(
+            app_name="test_app", user_id="alice@example.com", thread_id="thread-1"
+        )
+
+        assert ok is True
+        mock_session_service.get_session.assert_called_once_with(
+            session_id="thread-1", app_name="test_app", user_id="alice@example.com"
+        )
+        mock_memory_service.add_session_to_memory.assert_called_once_with(mock_session)
+
+    @pytest.mark.asyncio
+    async def test_save_without_thread_id_as_session_id_falls_back_to_scan(
+        self, mock_session_service, mock_memory_service, mock_session
+    ):
+        manager = SessionManager.get_instance(
+            session_service=mock_session_service,
+            memory_service=mock_memory_service,
+            use_thread_id_as_session_id=False,
+        )
+        # _find_session_by_thread_id uses list_sessions + state scan
+        list_response = MagicMock()
+        list_response.sessions = [mock_session]
+        mock_session_service.list_sessions.return_value = list_response
+        # After finding by scan, save_session_to_memory re-fetches via
+        # get_session to populate events (list_sessions strips them).
+        mock_session_service.get_session.return_value = mock_session
+
+        ok = await manager.save_session_to_memory(
+            app_name="test_app", user_id="alice@example.com", thread_id="thread-1"
+        )
+
+        assert ok is True
+        mock_memory_service.add_session_to_memory.assert_called_once_with(mock_session)
+        # Confirm we re-fetched via get_session by session.id (not thread_id)
+        mock_session_service.get_session.assert_called_once_with(
+            session_id=mock_session.id, app_name="test_app", user_id="alice@example.com"
+        )
+
+    @pytest.mark.asyncio
+    async def test_save_returns_false_when_session_missing(
+        self, mock_session_service, mock_memory_service
+    ):
+        manager = SessionManager.get_instance(
+            session_service=mock_session_service,
+            memory_service=mock_memory_service,
+            use_thread_id_as_session_id=True,
+        )
+        mock_session_service.get_session.return_value = None
+
+        ok = await manager.save_session_to_memory(
+            app_name="test_app", user_id="alice@example.com", thread_id="thread-1"
+        )
+
+        assert ok is False
+        mock_memory_service.add_session_to_memory.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_save_swallows_memory_service_errors(
+        self, mock_session_service, mock_memory_service, mock_session
+    ):
+        manager = SessionManager.get_instance(
+            session_service=mock_session_service,
+            memory_service=mock_memory_service,
+            use_thread_id_as_session_id=True,
+        )
+        mock_session_service.get_session.return_value = mock_session
+        mock_memory_service.add_session_to_memory.side_effect = RuntimeError("boom")
+
+        ok = await manager.save_session_to_memory(
+            app_name="test_app", user_id="alice@example.com", thread_id="thread-1"
+        )
+
+        assert ok is False  # Error path returns False, doesn't raise

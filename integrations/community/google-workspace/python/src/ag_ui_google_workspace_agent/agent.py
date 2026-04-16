@@ -1,29 +1,45 @@
 """Google Workspace agent.
 
-A Workspace-aware ADK agent designed to be paired with the
-@ag-ui/google-workspace add-on. Reads context entries injected by the add-on
-(host app, email subject/body, calendar event details, etc.) and uses the
-client-side tools the add-on injects (read_current_email, draft_reply,
-search_inbox, read_event_details, add_attendee, create_event, read_document,
-insert_text, replace_text, reply_in_thread).
+A Workspace-aware ADK agent paired with the @ag-ui/google-workspace add-on.
+Reads context entries injected by the add-on (host app, email subject/body,
+calendar event details, etc.) and uses the client-side tools the add-on
+injects (read_current_email, draft_reply, search_inbox, read_event_details,
+add_attendee, create_event, read_document, insert_text, replace_text,
+reply_in_thread, etc.).
 
-The agent's system prompt explicitly tells it how to access the context that
-the add-on stores under state['_ag_ui_context'] and how to choose between
-context-vs-tool-call.
+Cross-surface memory:
+    The agent uses ADK's InMemoryMemoryService via PreloadMemoryTool. Each
+    Workspace surface (Gmail, Calendar, Docs, Chat) runs as its own AG-UI
+    thread, but all surfaces share a single (app_name, user_id) memory
+    bucket. Memory is flushed after every run via
+    save_session_to_memory_per_turn so cross-surface references work in
+    near-real-time (not just after session cleanup).
+
+    The user_id is derived from a "user_email" Context[] entry sent by the
+    add-on on every request. Missing/empty values cause the extractor to
+    raise — we refuse to serve anonymous traffic rather than pooling it
+    into a shared memory bucket.
 """
 
 from __future__ import annotations
 
-from fastapi import FastAPI
-from ag_ui_adk import ADKAgent, AGUIToolset, add_adk_fastapi_endpoint
+from ag_ui.core import RunAgentInput
+from ag_ui_adk import ADKAgent, AGUIToolset
 from google.adk.agents import LlmAgent
 from google.adk import tools as adk_tools
+
 
 # Compatibility shim for PreloadMemoryTool (renamed in newer ADK versions)
 try:
     PreloadMemoryTool = adk_tools.preload_memory.PreloadMemoryTool
 except AttributeError:
     PreloadMemoryTool = adk_tools.preload_memory_tool.PreloadMemoryTool
+
+
+# Canonical context-entry description used to carry the authenticated user's
+# email from the add-on to this agent. The TypeScript add-on must send a
+# matching entry on every request.
+USER_EMAIL_CONTEXT_KEY = "user_email"
 
 
 WORKSPACE_INSTRUCTION = """
@@ -92,6 +108,19 @@ Every request includes contextual info via TWO channels — consult both:
      `create_bulleted_list`
    - CHAT: `reply_in_thread`
 
+# Cross-surface memory
+
+You may receive a `<PAST_CONVERSATIONS>...</PAST_CONVERSATIONS>` block in
+the prompt, injected automatically by the memory system. These are
+previous interactions the SAME user had with you — possibly on a
+DIFFERENT Workspace surface (e.g., you're now in Calendar, but the user
+was asking about an email in Gmail earlier).
+
+Use these memories for continuity when the user asks. Do NOT proactively
+volunteer cross-surface context unless the user brings it up. When
+memory conflicts with the current-surface context (`state['_ag_ui_context']`),
+trust the current surface — it's what the user is looking at right now.
+
 # Decision rules
 
 - Read-only ask answerable from context → answer directly.
@@ -120,16 +149,16 @@ Instead:
 - Use `create_bulleted_list` for bullet points (NOT `* item` markdown)
 
 Example — inserting a bold heading + paragraph:
-1. Call `insert_after_text(anchor="...", content="\nKey Takeaways\nThe main finding was...")`
+1. Call `insert_after_text(anchor="...", content="\\nKey Takeaways\\nThe main finding was...")`
 2. Call `apply_text_format(text="Key Takeaways", bold=true, headingLevel=2)`
 
-WRONG: `insert_text(text="**Key Takeaways**\n* Finding 1\n* Finding 2")`
-RIGHT: `insert_text(text="Key Takeaways\n")` then `apply_text_format(text="Key Takeaways", headingLevel=2)` then `create_bulleted_list(items=["Finding 1", "Finding 2"])`
+WRONG: `insert_text(text="**Key Takeaways**\\n* Finding 1\\n* Finding 2")`
+RIGHT: `insert_text(text="Key Takeaways\\n")` then `apply_text_format(text="Key Takeaways", headingLevel=2)` then `create_bulleted_list(items=["Finding 1", "Finding 2"])`
 
 # Style
 
 - Be concise; you're in a sidebar.
-- For summaries: lead sentence + 2–3 bullets.
+- For summaries: lead sentence + 2-3 bullets.
 - Don't apologize, don't hedge, don't say "I cannot."
 - **EVERY** time you reference an email by its subject line (from
   `search_inbox` or `read_emails` results), the subject MUST be a
@@ -171,38 +200,34 @@ RIGHT: `insert_text(text="Key Takeaways\n")` then `apply_text_format(text="Key T
 """
 
 
-WORKSPACE_TOOL_NAMES = [
-    # Gmail
-    "read_current_email",
-    "draft_reply",
-    "search_inbox",
-    "read_emails",
-    # Calendar
-    "read_event_details",
-    "add_attendee",
-    "update_event_description",
-    "update_event_title",
-    "reschedule_event",
-    "get_upcoming_events",
-    "create_event",
-    # Docs
-    "read_document",
-    "get_document_outline",
-    "insert_text",
-    "replace_text",
-    "insert_after_text",
-    "apply_text_format",
-    "create_bulleted_list",
-    # Chat
-    "reply_in_thread",
-]
+def extract_user_email(input: RunAgentInput) -> str:
+    """Extract the authenticated user's email from a RunAgentInput.
+
+    Looks for a Context entry with description == "user_email" and returns
+    the value. Raises ValueError when missing or empty to prevent
+    anonymous traffic from writing into a shared memory bucket.
+    """
+    for ctx in input.context or []:
+        if ctx.description == USER_EMAIL_CONTEXT_KEY:
+            value = (ctx.value or "").strip()
+            if not value:
+                raise ValueError(
+                    f"Context entry '{USER_EMAIL_CONTEXT_KEY}' is empty — "
+                    "the Google Workspace add-on must send an authenticated user email."
+                )
+            return value
+    raise ValueError(
+        f"Missing required context entry '{USER_EMAIL_CONTEXT_KEY}'. "
+        "The Google Workspace add-on must send the authenticated user's email "
+        "on every request. Anonymous traffic is not supported."
+    )
 
 
 workspace_agent = LlmAgent(
     name="workspace_assistant",
-    # Note: gemini-2.5-flash has a known issue with the ADK middleware's
-    # progressive SSE streaming aggregator that causes tool calls to be
-    # dropped (see google/adk-python issues #3974, #3754). Stick with
+    # gemini-2.5-flash has a known issue with the ADK middleware's
+    # progressive SSE streaming aggregator that drops tool calls
+    # (see google/adk-python issues #3974, #3754). Stick with
     # gemini-2.0-flash for reliable tool calling until that's fixed.
     model="gemini-2.0-flash",
     instruction=WORKSPACE_INSTRUCTION,
@@ -212,14 +237,12 @@ workspace_agent = LlmAgent(
     ],
 )
 
-# Wrap with ADK middleware
+
 workspace_adk_agent = ADKAgent(
     adk_agent=workspace_agent,
     app_name="google_workspace",
-    user_id="workspace_user",
+    user_id_extractor=extract_user_email,
     session_timeout_seconds=3600,
     use_in_memory_services=True,
+    save_session_to_memory_per_turn=True,
 )
-
-app = FastAPI(title="Google Workspace ADK Agent")
-add_adk_fastapi_endpoint(app, workspace_adk_agent, path="/")

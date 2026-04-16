@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Cross-surface memory via `user_email` context entry**: `runAgent()` now accepts a `userId` option and prepends a canonical `{ description: "user_email", value: <email> }` entry to `RunAgentInput.context`. Route handlers (`/actions/send`, `/actions/approve`, `/actions/reject`, `/chat/event`) pass the authenticated Google user's email through (using `auth.email`, not `auth.userId` — the latter is Google's numeric `sub`, not an email). The Python workspace agent extracts this to set its ADK `user_id`, enabling a shared memory bucket across Gmail/Calendar/Docs/Chat for the same user. Exported `USER_EMAIL_CONTEXT_KEY` constant and `buildOutgoingContext()` helper.
+
+- **Anonymous Chat rejection**: `/chat/event` now short-circuits with a user-facing "requires a signed-in user account" message when the incoming user payload lacks both `user.email` and `user.name` (would otherwise fall back to a synthetic `chat-user-${Date.now()}` / `addon-user-${Date.now()}` ID). Prevents anonymous traffic from being pooled into a shared memory bucket.
+
 - **Initial implementation** of the AG-UI Google Workspace Add-on — a pluggable HTTP-based Workspace Add-on that bridges any AG-UI protocol-compliant backend (LangGraph, CrewAI, Claude Agent SDK, Mastra, ADK middleware, etc.) to Gmail, Google Calendar, Google Docs, and Google Chat.
 
 - **Core**:
@@ -64,10 +68,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `examples/DEPLOYMENT_GUIDE.md` — end-to-end deployment walkthrough covering API enablement, OAuth consent screen, Marketplace SDK configuration, OAuth client creation, descriptor deployment, and a "Common Errors" table for the gotchas hit during development
   - Test suite with 135 tests covering core utilities, card rendering, route integration, all four host-app modules, session store, auth, and markdown conversion
 
-- **Example ADK backend** (`integrations/adk-middleware/python/examples/server/api/google_workspace.py`):
+- **Python workspace agent** (`integrations/community/google-workspace/python/`):
   - Workspace-aware ADK agent using `gemini-2.0-flash` with a system prompt that explicitly handles the Workspace Add-on interaction model
   - Detailed decision rules covering context access (`state['_ag_ui_context']`), tool selection (title vs. description edits), Chat response formatting, and clickable Gmail link emission for search results
-  - Wired into the example server at `/google-workspace` route
+  - `user_id_extractor` reads the authenticated user's email from the `user_email` Context entry and raises on missing/empty values (no anonymous fallback)
+  - Shared memory across surfaces for the same user via `PreloadMemoryTool` + `save_session_to_memory_per_turn=True`
+  - Standalone FastAPI server on port 8001 (configurable via `PORT`)
+  - Replaces the earlier inlined agent at `integrations/adk-middleware/python/examples/server/api/google_workspace.py`
 
 ### Known limitations
 

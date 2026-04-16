@@ -151,6 +151,42 @@ describe("Route integration tests", () => {
       expect(session).toBeNull();
     });
   });
+
+  describe("POST /chat/event — anonymous users", () => {
+    it("refuses standalone Chat requests without user.email or user.name", async () => {
+      const res = await post("/chat/event", {
+        type: "MESSAGE",
+        message: { text: "hello", thread: { name: "t-1" } },
+        // No user field → falls back to chat-user-${Date.now()}
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.text).toContain("requires a signed-in user account");
+    });
+
+    it("refuses Workspace Add-on Chat requests without user info", async () => {
+      const res = await post("/chat/event", {
+        commonEventObject: {
+          userLocale: "en",
+          hostApp: "CHAT",
+          platform: "WEB",
+        },
+        chat: {
+          messagePayload: {
+            message: { text: "hello", name: "n", thread: { name: "t-1" } },
+          },
+          // No user → falls back to addon-user-${Date.now()}
+        },
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      // Add-on response shape differs — dig into hostAppDataAction
+      const text =
+        body.hostAppDataAction?.chatDataAction?.createMessageAction?.message
+          ?.text ?? body.text;
+      expect(text).toContain("requires a signed-in user account");
+    });
+  });
 });
 
 /** Reproduce the hash logic from auth.ts for test assertions */

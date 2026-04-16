@@ -92,6 +92,10 @@ pnpm build && pnpm start
 
 The server starts on `http://localhost:8080` by default.
 
+### Backend agent
+
+For a ready-to-run ADK backend with cross-surface memory, see the sibling Python subproject at [../python/](../python/). It exposes a Gemini-powered workspace agent on port 8001 with a shared memory bucket per authenticated user. Set `AGUI_DEFAULT_BACKEND_URL=http://localhost:8001/` in the add-on's env to point at it. Any AG-UI-compliant backend also works.
+
 ### Environment Variables
 
 | Variable | Default | Description |

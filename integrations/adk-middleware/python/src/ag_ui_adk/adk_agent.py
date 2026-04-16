@@ -120,6 +120,7 @@ class ADKAgent:
         max_sessions_per_user: Optional[int] = None,    # No limit by default
         delete_session_on_cleanup: bool = True,
         save_session_to_memory_on_cleanup: bool = True,
+        save_session_to_memory_per_turn: bool = False,
         hitl_max_wait_seconds: Optional[int] = None,    # No limit by default
 
         # Predictive state configuration
@@ -165,6 +166,11 @@ class ADKAgent:
             max_sessions_per_user: Maximum concurrent sessions per user (None = unlimited)
             delete_session_on_cleanup: Whether to delete sessions from the adk SessionService on session cache cleanup
             save_session_to_memory_on_cleanup: Whether to save sessions to the adk MemoryService on session cache cleanup
+            save_session_to_memory_per_turn: Whether to flush the session to the MemoryService
+                after every run completes, in addition to the on-cleanup save. Useful when
+                memory needs to be queryable across concurrent sessions (e.g., multiple
+                surfaces of the same app sharing a memory pool) without waiting for the
+                session timeout. Defaults to False to preserve existing behavior.
             hitl_max_wait_seconds: Maximum time (in seconds) to preserve expired sessions
                 that have pending HITL tool calls before force-deleting them. None (default)
                 means no limit — sessions with pending tool calls are preserved indefinitely.
@@ -268,6 +274,7 @@ class ADKAgent:
                 max_sessions_per_user=max_sessions_per_user,
                 delete_session_on_cleanup=delete_session_on_cleanup,
                 save_session_to_memory_on_cleanup=save_session_to_memory_on_cleanup,
+                save_session_to_memory_per_turn=save_session_to_memory_per_turn,
                 use_thread_id_as_session_id=use_thread_id_as_session_id,
                 hitl_max_wait_seconds=hitl_max_wait_seconds,
             )
@@ -279,6 +286,7 @@ class ADKAgent:
                 max_sessions_per_user=max_sessions_per_user,
                 delete_session_on_cleanup=delete_session_on_cleanup,
                 save_session_to_memory_on_cleanup=save_session_to_memory_on_cleanup,
+                save_session_to_memory_per_turn=save_session_to_memory_per_turn,
                 use_thread_id_as_session_id=use_thread_id_as_session_id,
                 hitl_max_wait_seconds=hitl_max_wait_seconds,
             )
@@ -444,6 +452,7 @@ class ADKAgent:
         max_sessions_per_user: Optional[int] = None,    # No limit by default
         delete_session_on_cleanup: bool = True,
         save_session_to_memory_on_cleanup: bool = True,
+        save_session_to_memory_per_turn: bool = False,
         # AG-UI specific
         predict_state: Optional[Iterable[PredictStateMapping]] = None,
         emit_messages_snapshot: bool = False,
@@ -534,6 +543,7 @@ class ADKAgent:
             max_sessions_per_user=max_sessions_per_user,
             delete_session_on_cleanup=delete_session_on_cleanup,
             save_session_to_memory_on_cleanup=save_session_to_memory_on_cleanup,
+            save_session_to_memory_per_turn=save_session_to_memory_per_turn,
             predict_state=predict_state,
             emit_messages_snapshot=emit_messages_snapshot,
             streaming_function_call_arguments=streaming_function_call_arguments,
@@ -1757,6 +1767,19 @@ class ADKAgent:
             logger.debug(f"Finished iterating over _stream_events for execution {execution.thread_id}")
             logger.debug(f"Finished streaming events for execution {execution.thread_id}")
 
+            # Per-turn memory flush — opt-in via save_session_to_memory_per_turn.
+            # Lets callers share memory across concurrent sessions (e.g., multi-
+            # surface apps) without waiting for the session cleanup timeout.
+            if self._session_manager.save_session_to_memory_per_turn:
+                try:
+                    await self._session_manager.save_session_to_memory(
+                        app_name=self._get_app_name(input),
+                        user_id=user_id,
+                        thread_id=input.thread_id,
+                    )
+                except Exception as e:
+                    logger.error(f"Per-turn memory flush failed: {e}")
+
             # Emit RUN_FINISHED
             logger.debug(f"Emitting RUN_FINISHED for thread {input.thread_id}, run {input.run_id}")
             yield RunFinishedEvent(
@@ -1764,7 +1787,7 @@ class ADKAgent:
                 thread_id=input.thread_id,
                 run_id=input.run_id
             )
-            
+
         except Exception as e:
             logger.error(f"Error in new execution: {e}", exc_info=True)
             yield RunErrorEvent(

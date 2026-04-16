@@ -47,6 +47,7 @@ class SessionManager:
         max_sessions_per_user: Optional[int] = None,
         delete_session_on_cleanup: bool = True,
         save_session_to_memory_on_cleanup: bool = True,
+        save_session_to_memory_per_turn: bool = False,
         use_thread_id_as_session_id: bool = False,
         hitl_max_wait_seconds: Optional[int] = None,
     ):
@@ -60,6 +61,11 @@ class SessionManager:
             max_sessions_per_user: Maximum concurrent sessions per user (None = unlimited)
             delete_session_on_cleanup: Whether to delete sessions on cleanup
             save_session_to_memory_on_cleanup: Whether to save sessions to memory on cleanup
+            save_session_to_memory_per_turn: Whether to save sessions to memory after each
+                run completes, in addition to the on-cleanup save. Independent of
+                save_session_to_memory_on_cleanup. Useful when callers need memory to be
+                queryable across concurrent sessions (e.g., multiple surfaces of the same
+                app sharing memory) without waiting for the session timeout.
             use_thread_id_as_session_id: When True, use the AG-UI thread_id directly as
                 the ADK session_id instead of letting the backend generate one. This
                 eliminates the O(n) list_sessions scan needed to recover thread-to-session
@@ -82,6 +88,7 @@ class SessionManager:
         self._max_per_user = max_sessions_per_user
         self._delete_session_on_cleanup = delete_session_on_cleanup
         self._save_session_to_memory_on_cleanup = save_session_to_memory_on_cleanup
+        self._save_session_to_memory_per_turn = save_session_to_memory_per_turn
         self._use_thread_id_as_session_id = use_thread_id_as_session_id
         self._hitl_max_wait = hitl_max_wait_seconds
 
@@ -324,7 +331,65 @@ class SessionManager:
         except Exception as e:
             logger.error(f"Error getting session {session_id}: {e}")
             return None
-    
+
+    async def save_session_to_memory(
+        self,
+        app_name: str,
+        user_id: str,
+        thread_id: str,
+    ) -> bool:
+        """Flush a session's current events to the configured memory service.
+
+        Called after a run completes when save_session_to_memory_per_turn is on,
+        so memory becomes queryable without waiting for session cleanup.
+
+        Resolves the session via the thread_id-as-session-id direct lookup when
+        that mode is enabled, otherwise falls back to _find_session_by_thread_id.
+
+        Returns:
+            True if a flush succeeded, False if no memory service is configured
+            or the session couldn't be fetched / flushed.
+        """
+        if not self._memory_service:
+            return False
+
+        if self._use_thread_id_as_session_id:
+            session = await self.get_session(thread_id, app_name, user_id)
+        else:
+            # _find_session_by_thread_id uses list_sessions, which returns
+            # sessions WITHOUT events populated. Re-fetch with get_session
+            # to get the full event list — otherwise the memory service
+            # sees zero events and stores nothing.
+            located = await self._find_session_by_thread_id(app_name, user_id, thread_id)
+            if located:
+                session = await self.get_session(located.id, app_name, user_id)
+            else:
+                session = None
+
+        if not session:
+            logger.debug(
+                f"save_session_to_memory: no session found for thread {thread_id} "
+                f"(app={app_name}, user={user_id})"
+            )
+            return False
+        try:
+            await self._memory_service.add_session_to_memory(session)
+            logger.debug(
+                f"Saved session {app_name}:{session.id} to memory mid-flight "
+                f"(thread={thread_id}, events={len(session.events or [])})"
+            )
+            return True
+        except Exception as e:
+            logger.error(
+                f"Failed to save session for thread {thread_id} to memory: {e}"
+            )
+            return False
+
+    @property
+    def save_session_to_memory_per_turn(self) -> bool:
+        """Whether per-turn memory flushing is enabled."""
+        return self._save_session_to_memory_per_turn
+
     # ===== STATE MANAGEMENT METHODS =====
     
     async def update_session_state(

@@ -344,6 +344,7 @@ export function createActionRoutes(
         workspaceEvent: enrichedEvent,
         isWriteTool: getWriteToolChecker(hostApp),
         previousMessages,
+        userId: auth.email,
       });
 
       // If a write tool needs HITL approval, show the approval card
@@ -543,6 +544,7 @@ export function createActionRoutes(
             content: resultMessage,
           },
         ],
+        userId: auth.email,
       });
 
       return c.json(
@@ -628,6 +630,7 @@ export function createActionRoutes(
             }),
           },
         ],
+        userId: auth.email,
       });
 
       return c.json(

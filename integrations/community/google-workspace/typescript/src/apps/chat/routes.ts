@@ -147,6 +147,23 @@ export function createChatRoutes(
         );
       }
 
+      // Reject anonymous users — the backend requires an authenticated
+      // email to scope per-user memory. Avoid pooling synthetic IDs
+      // (`chat-user-${Date.now()}` / `addon-user-${Date.now()}`) into a
+      // shared memory bucket.
+      if (
+        userId.startsWith("chat-user-") ||
+        userId.startsWith("addon-user-")
+      ) {
+        return c.json(
+          chatResponse(
+            "This assistant requires a signed-in user account. Please use Google Chat with an authenticated account.",
+            isAddon,
+            threadName,
+          ),
+        );
+      }
+
       // Resolve backend URL
       const config = await sessionStore.getConfig(userId);
       const backendUrl =
@@ -223,6 +240,7 @@ export function createChatRoutes(
         clientTools,
         hostAppModule: chatModule,
         workspaceEvent: event,
+        userId,
       });
 
       const elapsed = Date.now() - startTime;
