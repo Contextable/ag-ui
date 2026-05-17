@@ -5,6 +5,8 @@ import type { AppRegistry } from "../../apps/registry";
 import { validateGoogleAuth, AuthError } from "../../core/auth";
 import { runAgent } from "../../core/agent-runner";
 import { markdownToChat } from "../../core/markdown-to-chat";
+import { renderA2UISurfaces } from "../../core/a2ui-renderer";
+import type { Card } from "../../cards/widgets";
 import type { WorkspaceEvent } from "../../types";
 
 /**
@@ -17,7 +19,7 @@ import type { WorkspaceEvent } from "../../types";
  * If threadName is provided, the response is posted into that thread
  * instead of as a new top-level message.
  */
-function chatResponse(
+export function chatResponse(
   text: string,
   isAddon: boolean,
   threadName?: string,
@@ -40,6 +42,47 @@ function chatResponse(
   if (threadName) {
     response.thread = { name: threadName };
   }
+  return response;
+}
+
+/**
+ * Heuristic: detects when the agent's text response is actually raw A2UI
+ * JSON (which happens when the model writes the operations into its text
+ * channel instead of calling the `send_a2ui_json_to_client` tool). We use
+ * this to avoid rendering the JSON twice — once as a card, once as noisy
+ * text beside it.
+ */
+export function looksLikeRawA2UI(text: string): boolean {
+  const trimmed = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/```$/i, "");
+  return /"(?:createSurface|updateComponents|updateDataModel)"/.test(trimmed);
+}
+
+/**
+ * Builds a Chat card-message response. Chat can render `cardsV2` entries
+ * alongside (optional) text. Structure differs between add-on Chat events
+ * and standalone Chat apps — same split as `chatResponse`.
+ */
+export function chatCardResponse(
+  cards: Array<{ cardId: string; card: Card }>,
+  isAddon: boolean,
+  threadName?: string,
+  text?: string,
+) {
+  if (isAddon) {
+    const message: Record<string, any> = { cardsV2: cards };
+    if (text) message.text = text;
+    if (threadName) message.thread = { name: threadName };
+    return {
+      hostAppDataAction: {
+        chatDataAction: {
+          createMessageAction: { message },
+        },
+      },
+    };
+  }
+  const response: Record<string, any> = { cardsV2: cards };
+  if (text) response.text = text;
+  if (threadName) response.thread = { name: threadName };
   return response;
 }
 
@@ -80,11 +123,14 @@ export function createChatRoutes(
       `[chat/event] addon=${isAddon} type=${rawBody.type ?? "n/a"}`,
     );
 
+    // Hoisted so the catch block below can reference threadName in error
+    // responses. Populated inside the try when we parse the incoming event.
+    let threadName: string | undefined;
+
     try {
       // Extract message text, user ID, and thread context from either format
       let messageText: string | undefined;
       let userId: string;
-      let threadName: string | undefined;
 
       if (isAddon) {
         // Workspace Add-on format
@@ -244,10 +290,52 @@ export function createChatRoutes(
       });
 
       const elapsed = Date.now() - startTime;
-      const responseText = markdownToChat(
-        result.responseText ||
-          "I processed your request but have no text response.",
-      );
+
+      // If the agent emitted A2UI, render it as one or more Chat card
+      // messages. Otherwise fall back to the plain text response.
+      if (result.a2uiOperations && result.a2uiOperations.length > 0) {
+        const actionBaseUrl = process.env.ACTION_BASE_URL ?? "";
+        const surfaces = renderA2UISurfaces(result.a2uiOperations, {
+          actionBaseUrl,
+        });
+        if (surfaces.length > 0) {
+          const cards = surfaces.map((s) => ({
+            cardId: s.surfaceId,
+            card: s.card,
+          }));
+          const supplementaryText =
+            result.responseText && !looksLikeRawA2UI(result.responseText)
+              ? markdownToChat(result.responseText)
+              : undefined;
+          console.log(
+            `[chat/event] A2UI response (${elapsed}ms): ${surfaces.length} surface(s)`,
+          );
+          return c.json(
+            chatCardResponse(cards, isAddon, threadName, supplementaryText),
+          );
+        }
+        // Ops were received but rendering produced nothing — usually a
+        // malformed surface (missing root, unknown components). Tell the
+        // user something useful rather than the generic "no response".
+        console.warn(
+          `[chat/event] A2UI ops received (${result.a2uiOperations.length}) but no surfaces rendered`,
+        );
+        return c.json(
+          chatResponse(
+            "I tried to render a card but the layout was invalid. Try asking again.",
+            isAddon,
+            threadName,
+          ),
+        );
+      }
+
+      // Plain text path. If the agent produced no text either — treat as
+      // a silent completion (likely a tool-only turn). Use a short ack
+      // instead of the misleading "no text response" placeholder.
+      const fallbackText = result.executedToolCalls.length > 0
+        ? "Done."
+        : "Let me know what you'd like me to do.";
+      const responseText = markdownToChat(result.responseText || fallbackText);
       console.log(
         `[chat/event] response (${elapsed}ms): "${responseText.slice(0, 80)}..."`,
       );

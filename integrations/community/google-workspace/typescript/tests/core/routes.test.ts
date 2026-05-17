@@ -187,6 +187,41 @@ describe("Route integration tests", () => {
       expect(text).toContain("requires a signed-in user account");
     });
   });
+
+  describe("POST /actions/a2ui-interact", () => {
+    it("returns a helpful error when surface/component params are missing", async () => {
+      const res = await post("/actions/a2ui-interact", baseEvent);
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      const card = body.renderActions.action.navigations[0].pushCard;
+      const firstWidget = card.sections[0].widgets[0];
+      expect(firstWidget.decoratedText?.text).toContain(
+        "Missing surface/component context",
+      );
+    });
+
+    it("returns an expired-session error when no session exists for the user", async () => {
+      const event = {
+        ...baseEvent,
+        commonEventObject: {
+          ...baseEvent.commonEventObject,
+          parameters: {
+            surfaceId: "s1",
+            componentId: "btn",
+            actionName: "submit",
+          },
+        },
+      };
+      const res = await post("/actions/a2ui-interact", event);
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      const card = body.renderActions.action.navigations[0].pushCard;
+      const firstWidget = card.sections[0].widgets[0];
+      expect(firstWidget.decoratedText?.text).toContain(
+        "session has expired",
+      );
+    });
+  });
 });
 
 /** Reproduce the hash logic from auth.ts for test assertions */

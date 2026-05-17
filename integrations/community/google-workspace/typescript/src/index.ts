@@ -61,6 +61,35 @@ export function createApp(options: CreateAppOptions = {}): Hono {
   // Health check
   app.get("/health", (c) => c.json({ status: "ok" }));
 
+  // Static assets — logo, favicon, etc. Served from ./assets/ relative
+  // to the process cwd. Google Workspace fetches logoUrl from the
+  // deployment descriptor; it must resolve over HTTPS with no auth.
+  app.get("/assets/*", async (c) => {
+    const pathname = new URL(c.req.url).pathname;
+    const rel = pathname.replace(/^\/assets\//, "");
+    if (!rel || rel.includes("..") || rel.startsWith("/")) {
+      return c.text("Not found", 404);
+    }
+    const fs = await import("node:fs/promises");
+    const path = await import("node:path");
+    const filePath = path.join(process.cwd(), "assets", rel);
+    try {
+      const data = await fs.readFile(filePath);
+      const ext = path.extname(rel).toLowerCase();
+      const mime =
+        ext === ".png" ? "image/png" :
+        ext === ".jpg" || ext === ".jpeg" ? "image/jpeg" :
+        ext === ".svg" ? "image/svg+xml" :
+        ext === ".ico" ? "image/x-icon" :
+        "application/octet-stream";
+      return new Response(data, {
+        headers: { "content-type": mime, "cache-control": "public, max-age=3600" },
+      });
+    } catch {
+      return c.text("Not found", 404);
+    }
+  });
+
   // Homepage trigger
   app.route("/", createHomepageRoutes(sessionStore, registry));
 

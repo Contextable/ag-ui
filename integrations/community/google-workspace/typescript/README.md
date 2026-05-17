@@ -96,6 +96,14 @@ The server starts on `http://localhost:8080` by default.
 
 For a ready-to-run ADK backend with cross-surface memory, see the sibling Python subproject at [../python/](../python/). It exposes a Gemini-powered workspace agent on port 8001 with a shared memory bucket per authenticated user. Set `AGUI_DEFAULT_BACKEND_URL=http://localhost:8001/` in the add-on's env to point at it. Any AG-UI-compliant backend also works.
 
+### A2UI (structured UI)
+
+The add-on auto-detects [A2UI v0.9](https://a2ui.org/specification/v0_9/basic_catalog.json) output from any AG-UI backend via `@ag-ui/a2ui-middleware`. When an agent calls `send_a2ui_json_to_client(a2ui_json=...)` (e.g. via Google's [A2UI Python SDK](https://github.com/google/A2UI)), the add-on renders the resulting components as CardService widgets: Text, Button, Image, Divider, TextField, Checkbox, ChoicePicker, DateTimeInput, Icon, Row/Column/List/Card layouts. Unsupported components (Video, AudioPlayer, Slider, Tabs, Modal) degrade gracefully.
+
+User interactions on A2UI surfaces (button clicks, form submits) POST back to `/actions/a2ui-interact`, which forwards the action + form values to the agent as `forwardedProps.a2uiAction`. The middleware converts that into a synthetic `log_a2ui_event` tool call the agent sees on the next turn.
+
+Any backend that doesn't emit A2UI continues to render as plain conversation cards — A2UI is purely additive.
+
 ### Environment Variables
 
 | Variable | Default | Description |

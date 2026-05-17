@@ -2,13 +2,15 @@ import { Hono } from "hono";
 import { randomUUID } from "crypto";
 import type { SessionStore } from "../core/session";
 import type { AppRegistry } from "../apps/registry";
-import { runAgent } from "../core/agent-runner";
+import { runAgent, type AgentRunResult } from "../core/agent-runner";
+import { renderA2UISurfaces } from "../core/a2ui-renderer";
 import { conversationCard } from "../cards/conversation";
 import { settingsCard } from "../cards/settings";
 import { approvalCard } from "../cards/approval";
 import { validateGoogleAuth, AuthError } from "../core/auth";
 import { renderCard } from "../cards/widgets";
 import type { WorkspaceEvent, HostApp } from "../types";
+import type { A2UIUserAction } from "@ag-ui/a2ui-middleware";
 
 /**
  * Extracts form input values from the Google Workspace event.
@@ -24,6 +26,33 @@ function getFormValue(event: WorkspaceEvent, name: string): string {
  */
 function getParameter(event: WorkspaceEvent, name: string): string {
   return event.commonEventObject?.parameters?.[name] ?? "";
+}
+
+/**
+ * Render an agent run result as a card response. Prefers A2UI surfaces
+ * when the agent emitted any; otherwise renders a plain conversation card
+ * with the agent's text + any executed tool-call summary.
+ */
+function renderAgentResult(result: AgentRunResult) {
+  if (result.a2uiOperations && result.a2uiOperations.length > 0) {
+    const actionBaseUrl = process.env.ACTION_BASE_URL ?? "";
+    const surfaces = renderA2UISurfaces(result.a2uiOperations, {
+      actionBaseUrl,
+    });
+    if (surfaces.length > 0) {
+      // CardService's renderCard envelope takes a single Card. If multiple
+      // surfaces exist we render the first and leave the rest for a later
+      // turn — sidebars can only show one card at a time.
+      return renderCard(surfaces[0].card);
+    }
+  }
+  return renderCard(
+    conversationCard({
+      agentResponse:
+        result.responseText || "Agent completed with no text response.",
+      toolCalls: result.executedToolCalls,
+    }),
+  );
 }
 
 /**
@@ -392,14 +421,7 @@ export function createActionRoutes(
         return c.json(result.actionResponse.actionResponse);
       }
 
-      return c.json(
-        renderCard(
-          conversationCard({
-            agentResponse: result.responseText || "Agent completed with no text response.",
-            toolCalls: result.executedToolCalls,
-          }),
-        ),
-      );
+      return c.json(renderAgentResult(result));
     } catch (err) {
       if (err instanceof AuthError) return c.json({ error: err.message }, 401);
       console.error("Send error:", err);
@@ -548,16 +570,15 @@ export function createActionRoutes(
       });
 
       return c.json(
-        renderCard(
-          conversationCard({
-            agentResponse:
-              agentResult.responseText || "Action completed successfully.",
-            toolCalls: [
-              { name: toolCall.function.name, status: "completed" },
-              ...agentResult.executedToolCalls,
-            ],
-          }),
-        ),
+        renderAgentResult({
+          ...agentResult,
+          responseText:
+            agentResult.responseText || "Action completed successfully.",
+          executedToolCalls: [
+            { name: toolCall.function.name, status: "completed" },
+            ...agentResult.executedToolCalls,
+          ],
+        }),
       );
     } catch (err) {
       if (err instanceof AuthError) return c.json({ error: err.message }, 401);
@@ -634,18 +655,130 @@ export function createActionRoutes(
       });
 
       return c.json(
-        renderCard(
-          conversationCard({
-            agentResponse:
-              agentResult.responseText ||
-              `The ${toolName} action was rejected.`,
-            toolCalls: [{ name: toolName, status: "completed" }],
-          }),
-        ),
+        renderAgentResult({
+          ...agentResult,
+          responseText:
+            agentResult.responseText ||
+            `The ${toolName} action was rejected.`,
+          executedToolCalls: [{ name: toolName, status: "completed" }],
+        }),
       );
     } catch (err) {
       if (err instanceof AuthError) return c.json({ error: err.message }, 401);
       console.error("Reject error:", err);
+      return c.json(
+        renderCard(
+          conversationCard({ error: `Error: ${(err as Error).message}` }),
+        ),
+      );
+    }
+  });
+
+  /**
+   * A2UI user-interaction handler. Fires when the user clicks a Button on
+   * an A2UI-rendered surface (or submits a form via a Button). Builds an
+   * `A2UIUserAction` payload that `@ag-ui/a2ui-middleware` converts into a
+   * synthetic `log_a2ui_event` tool call on the agent side, then renders
+   * whatever the agent emits in response (another A2UI surface or plain
+   * text).
+   */
+  routes.post("/actions/a2ui-interact", async (c) => {
+    const event: WorkspaceEvent = await c.req.json();
+    try {
+      const auth = await validateGoogleAuth(
+        c.req.header("Authorization"),
+        event.authorizationEventObject?.userIdToken,
+        event.authorizationEventObject?.userOAuthToken,
+      );
+
+      const surfaceId = getParameter(event, "surfaceId");
+      const componentId = getParameter(event, "componentId");
+      const actionName = getParameter(event, "actionName") || "action";
+
+      if (!surfaceId || !componentId) {
+        return c.json(
+          renderCard(
+            conversationCard({
+              error:
+                "Missing surface/component context on the A2UI interaction.",
+            }),
+          ),
+        );
+      }
+
+      const hostApp: HostApp = event.commonEventObject?.hostApp ?? "GMAIL";
+      const session = await sessionStore.getSession(auth.userId, hostApp);
+      if (!session) {
+        return c.json(
+          renderCard(
+            conversationCard({
+              error: "Your session has expired. Please send a new message.",
+            }),
+          ),
+        );
+      }
+
+      // Collect every form input on the card into a plain object and hand
+      // it to the agent as `context.formValues` keyed by component id.
+      const formValues: Record<string, unknown> = {};
+      const formInputs = event.commonEventObject?.formInputs ?? {};
+      for (const [name, input] of Object.entries(formInputs)) {
+        const i = input as {
+          stringInputs?: { value?: string[] };
+          dateTimeInput?: { msSinceEpoch?: string };
+          dateInput?: { msSinceEpoch?: string };
+          timeInput?: { hours?: number; minutes?: number };
+        };
+        const strings = i.stringInputs?.value;
+        if (strings && strings.length > 0) {
+          // Normalize single-select (still arriving as a 1-item array) to
+          // a bare string so the agent doesn't have to unwrap.
+          formValues[name] = strings.length === 1 ? strings[0] : strings;
+        } else if (i.dateTimeInput?.msSinceEpoch) {
+          formValues[name] = new Date(
+            Number(i.dateTimeInput.msSinceEpoch),
+          ).toISOString();
+        } else if (i.dateInput?.msSinceEpoch) {
+          formValues[name] = new Date(
+            Number(i.dateInput.msSinceEpoch),
+          ).toISOString();
+        } else if (i.timeInput) {
+          formValues[name] = `${i.timeInput.hours ?? 0}:${i.timeInput.minutes ?? 0}`;
+        }
+      }
+
+      const userAction: A2UIUserAction = {
+        name: actionName,
+        surfaceId,
+        sourceComponentId: componentId,
+        context: { formValues },
+        timestamp: new Date().toISOString(),
+      };
+
+      const module = registry.get(hostApp);
+      const context = module
+        ? await module.extractContext(event)
+        : [{ description: "Google Workspace host application", value: hostApp }];
+      const clientTools = module ? module.getTools(event) : [];
+
+      const agentResult = await runAgent({
+        userMessage: "",
+        threadId: session.threadId,
+        backendUrl: session.backendUrl,
+        credentials: session.credentials,
+        context,
+        clientTools,
+        hostAppModule: module,
+        workspaceEvent: event,
+        isWriteTool: getWriteToolChecker(hostApp),
+        userId: auth.email,
+        a2uiAction: userAction,
+      });
+
+      return c.json(renderAgentResult(agentResult));
+    } catch (err) {
+      if (err instanceof AuthError) return c.json({ error: err.message }, 401);
+      console.error("A2UI interact error:", err);
       return c.json(
         renderCard(
           conversationCard({ error: `Error: ${(err as Error).message}` }),

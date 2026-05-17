@@ -47,6 +47,23 @@ export interface Widget {
   buttonList?: { buttons: Button[] };
   image?: { imageUrl: string; altText?: string; onClick?: OnClick };
   divider?: Record<string, never>;
+  selectionInput?: {
+    name: string;
+    label?: string;
+    type: "CHECK_BOX" | "RADIO_BUTTON" | "DROPDOWN" | "SWITCH";
+    items: Array<{
+      text: string;
+      value: string;
+      selected?: boolean;
+    }>;
+  };
+  dateTimePicker?: {
+    name: string;
+    label?: string;
+    type?: "DATE_AND_TIME" | "DATE_ONLY" | "TIME_ONLY";
+    valueMsEpoch?: string;
+    timezoneOffsetDate?: number;
+  };
 }
 
 export interface Button {
@@ -147,6 +164,54 @@ export function linkButton(text: string, url: string): Button {
 
 export function divider(): Widget {
   return { divider: {} };
+}
+
+export function image(opts: {
+  url: string;
+  altText?: string;
+  onClick?: OnClick;
+}): Widget {
+  return {
+    image: {
+      imageUrl: opts.url,
+      altText: opts.altText,
+      onClick: opts.onClick,
+    },
+  };
+}
+
+export function selectionInput(opts: {
+  name: string;
+  label?: string;
+  type: "CHECK_BOX" | "RADIO_BUTTON" | "DROPDOWN" | "SWITCH";
+  items: Array<{ text: string; value: string; selected?: boolean }>;
+}): Widget {
+  return {
+    selectionInput: {
+      name: opts.name,
+      label: opts.label,
+      type: opts.type,
+      items: opts.items,
+    },
+  };
+}
+
+export function dateTimePicker(opts: {
+  name: string;
+  label?: string;
+  type?: "DATE_AND_TIME" | "DATE_ONLY" | "TIME_ONLY";
+  valueMsEpoch?: string;
+  timezoneOffsetDate?: number;
+}): Widget {
+  return {
+    dateTimePicker: {
+      name: opts.name,
+      label: opts.label,
+      type: opts.type ?? "DATE_AND_TIME",
+      valueMsEpoch: opts.valueMsEpoch,
+      timezoneOffsetDate: opts.timezoneOffsetDate,
+    },
+  };
 }
 
 export function section(

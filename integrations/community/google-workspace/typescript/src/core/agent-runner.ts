@@ -8,9 +8,73 @@ import type {
   ToolCall,
 } from "@ag-ui/core";
 import { EventType } from "@ag-ui/core";
+import {
+  A2UIActivityType,
+  A2UIMiddleware,
+  A2UI_OPERATIONS_KEY,
+  type A2UIUserAction,
+} from "@ag-ui/a2ui-middleware";
 import { randomUUID } from "crypto";
 import type { SessionStore } from "./session";
 import type { HostAppModule, WorkspaceEvent, ToolResult, HostApp } from "../types";
+import type { A2UIOperation } from "./a2ui-renderer";
+
+/**
+ * Tool name the Python A2UI SDK's `SendA2uiToClientToolset` exposes.
+ * The `@ag-ui/a2ui-middleware` listens for tool calls with this name so it
+ * can parse A2UI JSON out of the tool's arguments / result and emit
+ * ACTIVITY_SNAPSHOT events we can render.
+ */
+export const A2UI_SEND_TOOL_NAME = "send_a2ui_json_to_client";
+
+/**
+ * Key the Google A2UI Python SDK's `SendA2uiToClientToolset` uses when
+ * it wraps the validated operations in the tool result. Matches
+ * `a2ui.adk.send_a2ui_to_client_toolset.VALIDATED_A2UI_JSON_KEY`.
+ */
+const VALIDATED_A2UI_JSON_KEY = "validated_a2ui_json";
+
+/**
+ * Extract A2UI operations from a `send_a2ui_json_to_client` tool result.
+ *
+ * The TS `@ag-ui/a2ui-middleware`'s `tryParseA2UIOperations` looks for a
+ * `a2ui_operations` key at the top level — but Google's A2UI Python SDK
+ * returns `{"validated_a2ui_json": [...ops...]}` instead. Different key,
+ * so the middleware extracts nothing and ops are silently lost. This
+ * picks them up.
+ *
+ * The tool result arrives as a JSON string. It can be wrapped in an
+ * extra layer in some ADK configurations (e.g. a ToolMessage whose
+ * content is JSON-encoded), so we try both direct and double-encoded
+ * shapes.
+ *
+ * Exported for testing.
+ */
+export function extractValidatedA2UIFromToolResult(
+  resultContent: string,
+): A2UIOperation[] {
+  if (!resultContent) return [];
+  const tryExtract = (obj: unknown): A2UIOperation[] => {
+    if (!obj || typeof obj !== "object" || Array.isArray(obj)) return [];
+    const ops = (obj as Record<string, unknown>)[VALIDATED_A2UI_JSON_KEY];
+    if (!Array.isArray(ops)) return [];
+    // v0.9 ops are themselves { version, createSurface?|updateComponents?|... }
+    // objects. We let the renderer sort out which fields each has.
+    return ops as A2UIOperation[];
+  };
+  try {
+    const direct = tryExtract(JSON.parse(resultContent));
+    if (direct.length > 0) return direct;
+  } catch {
+    // not direct JSON; maybe double-encoded
+  }
+  try {
+    const inner = JSON.parse(JSON.parse(resultContent));
+    return tryExtract(inner);
+  } catch {
+    return [];
+  }
+}
 
 const MAX_TOOL_LOOPS = 10;
 const AGENT_TIMEOUT_MS = 30_000;
@@ -57,6 +121,13 @@ export interface AgentRunResult {
     toolName: string;
     parameters: Record<string, unknown>;
   };
+  /**
+   * A2UI operations accumulated from ACTIVITY_SNAPSHOT events during the run,
+   * keyed by the emitting event's messageId. The renderer groups them into
+   * surfaces internally; this list is the raw operations as the backend
+   * emitted them. Empty when the agent produced no A2UI.
+   */
+  a2uiOperations: A2UIOperation[];
 }
 
 export interface RunAgentOptions {
@@ -88,6 +159,14 @@ export interface RunAgentOptions {
    * refuses requests without it.
    */
   userId?: string;
+  /**
+   * User interaction payload for an A2UI surface (button click, form
+   * submit, etc.). Forwarded to the backend via `forwardedProps.a2uiAction`,
+   * which the `@ag-ui/a2ui-middleware` recognizes and converts into a
+   * synthetic `log_a2ui_event` tool call in the conversation. Only set on
+   * requests originating from /actions/a2ui-interact.
+   */
+  a2uiAction?: A2UIUserAction;
 }
 
 /**
@@ -119,6 +198,16 @@ export async function runAgent(opts: RunAgentOptions): Promise<AgentRunResult> {
     initialState: {},
   });
 
+  // Install the A2UI middleware so ACTIVITY_SNAPSHOT events surface from
+  // the agent's tool calls to send_a2ui_json_to_client. We DON'T inject a
+  // render_a2ui tool — our agents use the Python SDK's toolset instead.
+  agent.use(
+    new A2UIMiddleware({
+      injectA2UITool: false,
+      a2uiToolNames: [A2UI_SEND_TOOL_NAME],
+    }),
+  );
+
   const executedToolCalls: Array<{
     name: string;
     status: "completed" | "pending";
@@ -126,6 +215,30 @@ export async function runAgent(opts: RunAgentOptions): Promise<AgentRunResult> {
 
   // Client-side tool name set for quick lookup
   const clientToolNames = new Set(opts.clientTools.map((t) => t.name));
+
+  // A2UI operations accumulate across the run (and across loop iterations);
+  // the last set the agent emits wins, so we reset each iteration and
+  // collect again via the subscriber below.
+  let a2uiOperations: A2UIOperation[] = [];
+  const a2uiSubscriber = {
+    onActivitySnapshotEvent({ event }: { event: { activityType: string; content: Record<string, unknown> } }) {
+      if (event.activityType !== A2UIActivityType) return;
+      const ops = event.content[A2UI_OPERATIONS_KEY];
+      if (Array.isArray(ops)) {
+        a2uiOperations = a2uiOperations.concat(ops as A2UIOperation[]);
+      }
+    },
+    // Fallback path: @ag-ui/a2ui-middleware's `tryParseA2UIOperations` looks
+    // for a top-level `a2ui_operations` key, but Google's A2UI Python SDK
+    // returns `{"validated_a2ui_json": [...ops...]}`. Different key →
+    // middleware extracts nothing. Pick them up ourselves.
+    onToolCallResultEvent({ event }: { event: { content: string; toolCallId: string } }) {
+      const fallback = extractValidatedA2UIFromToolResult(event.content);
+      if (fallback.length > 0) {
+        a2uiOperations = a2uiOperations.concat(fallback);
+      }
+    },
+  };
 
   let messages = opts.previousMessages ?? [];
   let loopCount = 0;
@@ -154,18 +267,26 @@ export async function runAgent(opts: RunAgentOptions): Promise<AgentRunResult> {
     // Drops entries with missing/empty values (Pydantic 422 otherwise).
     const cleanContext = buildOutgoingContext(opts.context, opts.userId);
 
+    // Only attach a2uiAction on the FIRST iteration — it represents a user
+    // interaction with a rendered surface, which should produce a single
+    // synthetic log_a2ui_event tool call, not be reinjected on each loop.
+    const forwardedProps: Record<string, unknown> =
+      loopCount === 1 && opts.a2uiAction
+        ? { a2uiAction: { userAction: opts.a2uiAction } }
+        : {};
+
     const input: RunAgentInput = {
       threadId: opts.threadId,
       runId: randomUUID(),
       messages: [
         ...messages,
-        ...(loopCount === 1 ? [userMessage] : []),
+        ...(loopCount === 1 && opts.userMessage ? [userMessage] : []),
         ...(pendingToolMessage ? [pendingToolMessage] : []),
       ],
       tools: opts.clientTools,
       context: cleanContext,
       state: {},
-      forwardedProps: {},
+      forwardedProps,
     };
 
     console.log(
@@ -199,13 +320,16 @@ export async function runAgent(opts: RunAgentOptions): Promise<AgentRunResult> {
     );
 
     try {
-      const result = await agent.runAgent({
-        abortController,
-        runId: input.runId,
-        tools: input.tools,
-        context: input.context,
-        forwardedProps: input.forwardedProps,
-      });
+      const result = await agent.runAgent(
+        {
+          abortController,
+          runId: input.runId,
+          tools: input.tools,
+          context: input.context,
+          forwardedProps: input.forwardedProps,
+        },
+        a2uiSubscriber,
+      );
 
       messages = result.newMessages;
       pendingToolMessage = null;
@@ -254,6 +378,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<AgentRunResult> {
               responseText: extractResponseText(messages),
               messages,
               executedToolCalls,
+              a2uiOperations,
               pendingApproval: {
                 toolCall: tc,
                 toolName: tc.function.name,
@@ -307,6 +432,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<AgentRunResult> {
     messages,
     executedToolCalls,
     actionResponse,
+    a2uiOperations,
   };
 }
 

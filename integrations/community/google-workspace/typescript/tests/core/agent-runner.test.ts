@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   buildOutgoingContext,
+  extractValidatedA2UIFromToolResult,
   runAgent,
   USER_EMAIL_CONTEXT_KEY,
 } from "../../src/core/agent-runner";
@@ -108,5 +109,72 @@ describe("buildOutgoingContext", () => {
 
   it("uses the exact description constant so Python extractor matches", () => {
     expect(USER_EMAIL_CONTEXT_KEY).toBe("user_email");
+  });
+});
+
+// Regression: @ag-ui/a2ui-middleware's `tryParseA2UIOperations` looks for an
+// `a2ui_operations` key, but Google's A2UI Python SDK returns
+// `{"validated_a2ui_json": [...ops...]}`. The middleware silently extracts
+// nothing, so we have a fallback extractor that recognizes the SDK's shape.
+describe("extractValidatedA2UIFromToolResult", () => {
+  const sampleOps = [
+    {
+      version: "v0.9",
+      createSurface: {
+        surfaceId: "s1",
+        catalogId: "https://a2ui.org/specification/v0_9/basic_catalog.json",
+      },
+    },
+    {
+      version: "v0.9",
+      updateComponents: {
+        surfaceId: "s1",
+        components: [{ id: "root", component: "Column", children: [] }],
+      },
+    },
+  ];
+
+  it("extracts operations from the Python SDK's {validated_a2ui_json: [...]} wrapper", () => {
+    const toolResult = JSON.stringify({ validated_a2ui_json: sampleOps });
+    const ops = extractValidatedA2UIFromToolResult(toolResult);
+    expect(ops).toHaveLength(2);
+    expect((ops[0] as any).createSurface?.surfaceId).toBe("s1");
+    expect((ops[1] as any).updateComponents?.components).toHaveLength(1);
+  });
+
+  it("handles double-encoded JSON (ToolMessage content often arrives JSON-stringified)", () => {
+    const toolResult = JSON.stringify(
+      JSON.stringify({ validated_a2ui_json: sampleOps }),
+    );
+    const ops = extractValidatedA2UIFromToolResult(toolResult);
+    expect(ops).toHaveLength(2);
+  });
+
+  it("returns empty array for non-A2UI tool results (e.g. read_current_email)", () => {
+    const toolResult = JSON.stringify({
+      subject: "hi",
+      body: "hello there",
+    });
+    expect(extractValidatedA2UIFromToolResult(toolResult)).toEqual([]);
+  });
+
+  it("returns empty array for malformed JSON", () => {
+    expect(extractValidatedA2UIFromToolResult("not json at all")).toEqual([]);
+    expect(extractValidatedA2UIFromToolResult("")).toEqual([]);
+  });
+
+  it("returns empty array when validated_a2ui_json is not an array", () => {
+    const bad = JSON.stringify({ validated_a2ui_json: "just a string" });
+    expect(extractValidatedA2UIFromToolResult(bad)).toEqual([]);
+  });
+
+  it("returns empty array for arrays at the top level (not an object)", () => {
+    expect(extractValidatedA2UIFromToolResult(JSON.stringify([1, 2]))).toEqual([]);
+  });
+
+  it("returns empty array for null or primitives at the top level", () => {
+    expect(extractValidatedA2UIFromToolResult("null")).toEqual([]);
+    expect(extractValidatedA2UIFromToolResult("42")).toEqual([]);
+    expect(extractValidatedA2UIFromToolResult('"hello"')).toEqual([]);
   });
 });

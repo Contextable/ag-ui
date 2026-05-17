@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A2UI v0.9 rendering**: agents using Google's [A2UI Python SDK](https://github.com/google/A2UI) can now emit structured UI surfaces (buttons, text fields, checkboxes, choice pickers, date/time inputs, images, dividers, column/list/card layouts) that the add-on renders natively as CardService widgets. Surfaces arrive as `ACTIVITY_SNAPSHOT` events from `@ag-ui/a2ui-middleware` and are translated to cards by [src/core/a2ui-renderer.ts](integrations/community/google-workspace/typescript/src/core/a2ui-renderer.ts). Data binding (`{path}` references + `{{path}}` templates) is resolved at render time against the surface's data model. Cards with no A2UI content render as plain conversation cards unchanged — A2UI is purely additive. 27 new renderer tests plus route-level tests for the interaction loop.
+- **`POST /actions/a2ui-interact`**: handles user interactions on A2UI-rendered surfaces (button clicks, form submits). Collects `formInputs` keyed by component id, builds an `A2UIUserAction`, and forwards to the agent via `forwardedProps.a2uiAction`. The middleware injects a synthetic `log_a2ui_event` tool call so the agent sees the action. Date/time fields are normalized to ISO 8601 strings before being sent back.
+- **`src/cards/widgets.ts`** gains `image()`, `selectionInput()` (CHECK_BOX / RADIO_BUTTON / DROPDOWN / SWITCH), and `dateTimePicker()` builders used by the A2UI renderer.
+
+### Fixed
+
+- **Chat route `threadName` scope** ([src/apps/chat/routes.ts](integrations/community/google-workspace/typescript/src/apps/chat/routes.ts)): `threadName` was declared inside the `try` block but referenced in the `catch` block where it was out of scope. Hoisted to the enclosing scope so error-path responses correctly thread the reply into the same Chat thread. This was the "pre-existing chat `threadName` issue" flagged as known in the design spec §26. `pnpm typecheck` now runs clean.
+
+### Changed
+
+- **`@ag-ui/*` deps moved to the standard monorepo integration pattern.** `@ag-ui/core`, `@ag-ui/client`, and `@ag-ui/a2ui-middleware` are now declared in `peerDependencies` with `>=` version ranges (matching every other integration: langchain, crew-ai, claude-agent-sdk, spring-ai, etc.). The same packages appear in `devDependencies` as `workspace:*` so in-repo `pnpm install` resolves to local sources for typecheck/test. `rxjs@7.8.1` is also pinned in peers + devDeps to match `@ag-ui/a2ui-middleware`'s peer constraint. Fixes the previous setup where `@ag-ui/*` were `dependencies: workspace:*`, which broke external `npm install` (the `workspace:` protocol is pnpm-only).
+
 - **Cross-surface memory via `user_email` context entry**: `runAgent()` now accepts a `userId` option and prepends a canonical `{ description: "user_email", value: <email> }` entry to `RunAgentInput.context`. Route handlers (`/actions/send`, `/actions/approve`, `/actions/reject`, `/chat/event`) pass the authenticated Google user's email through (using `auth.email`, not `auth.userId` — the latter is Google's numeric `sub`, not an email). The Python workspace agent extracts this to set its ADK `user_id`, enabling a shared memory bucket across Gmail/Calendar/Docs/Chat for the same user. Exported `USER_EMAIL_CONTEXT_KEY` constant and `buildOutgoingContext()` helper.
 
 - **Anonymous Chat rejection**: `/chat/event` now short-circuits with a user-facing "requires a signed-in user account" message when the incoming user payload lacks both `user.email` and `user.name` (would otherwise fall back to a synthetic `chat-user-${Date.now()}` / `addon-user-${Date.now()}` ID). Prevents anonymous traffic from being pooled into a shared memory bucket.

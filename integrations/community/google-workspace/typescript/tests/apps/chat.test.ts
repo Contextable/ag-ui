@@ -2,6 +2,12 @@ import { describe, it, expect } from "vitest";
 import { chatModule, isChatWriteTool } from "../../src/apps/chat/index";
 import { extractChatContext } from "../../src/apps/chat/context";
 import { getChatTools, executeChatTool } from "../../src/apps/chat/tools";
+import {
+  chatCardResponse,
+  chatResponse,
+  looksLikeRawA2UI,
+} from "../../src/apps/chat/routes";
+import type { Card } from "../../src/cards/widgets";
 import type { WorkspaceEvent } from "../../src/types";
 
 const baseEvent: WorkspaceEvent = {
@@ -135,5 +141,107 @@ describe("Chat Module", () => {
       const parsed = JSON.parse(result!.result);
       expect(parsed.error).toContain("space context");
     });
+  });
+});
+
+describe("chatResponse envelope", () => {
+  it("wraps add-on text messages in hostAppDataAction", () => {
+    const r = chatResponse("hi", true) as any;
+    expect(r.hostAppDataAction?.chatDataAction?.createMessageAction?.message)
+      .toEqual({ text: "hi" });
+  });
+
+  it("returns plain { text } for standalone Chat apps", () => {
+    const r = chatResponse("hi", false) as any;
+    expect(r).toEqual({ text: "hi" });
+  });
+
+  it("attaches thread.name when present", () => {
+    const standalone = chatResponse("hi", false, "spaces/X/threads/T") as any;
+    expect(standalone.thread).toEqual({ name: "spaces/X/threads/T" });
+    const addon = chatResponse("hi", true, "spaces/X/threads/T") as any;
+    expect(
+      addon.hostAppDataAction.chatDataAction.createMessageAction.message.thread,
+    ).toEqual({ name: "spaces/X/threads/T" });
+  });
+});
+
+describe("chatCardResponse envelope", () => {
+  const card: Card = {
+    sections: [{ widgets: [{ textParagraph: { text: "hi" } }] }],
+  };
+  const cards = [{ cardId: "s1", card }];
+
+  it("wraps add-on cardsV2 in hostAppDataAction", () => {
+    const r = chatCardResponse(cards, true) as any;
+    const msg = r.hostAppDataAction?.chatDataAction?.createMessageAction?.message;
+    expect(msg?.cardsV2).toEqual(cards);
+    expect(msg?.text).toBeUndefined();
+    expect(msg?.thread).toBeUndefined();
+  });
+
+  it("returns plain { cardsV2 } for standalone Chat apps", () => {
+    const r = chatCardResponse(cards, false) as any;
+    expect(r.cardsV2).toEqual(cards);
+  });
+
+  it("includes supplementary text when provided", () => {
+    const r = chatCardResponse(cards, false, undefined, "see below") as any;
+    expect(r.text).toBe("see below");
+    expect(r.cardsV2).toEqual(cards);
+  });
+
+  it("includes thread.name when provided", () => {
+    const r = chatCardResponse(cards, false, "spaces/X/threads/T") as any;
+    expect(r.thread).toEqual({ name: "spaces/X/threads/T" });
+  });
+
+  it("add-on path attaches thread.name inside the message", () => {
+    const r = chatCardResponse(cards, true, "spaces/X/threads/T", "hi") as any;
+    const msg = r.hostAppDataAction.chatDataAction.createMessageAction.message;
+    expect(msg.thread).toEqual({ name: "spaces/X/threads/T" });
+    expect(msg.text).toBe("hi");
+    expect(msg.cardsV2).toEqual(cards);
+  });
+});
+
+describe("looksLikeRawA2UI", () => {
+  it("flags raw createSurface JSON", () => {
+    expect(
+      looksLikeRawA2UI(
+        '[{"version":"v0.9","createSurface":{"surfaceId":"s"}}]',
+      ),
+    ).toBe(true);
+  });
+
+  it("flags raw updateComponents JSON", () => {
+    expect(
+      looksLikeRawA2UI(
+        '{"version":"v0.9","updateComponents":{"surfaceId":"s","components":[]}}',
+      ),
+    ).toBe(true);
+  });
+
+  it("flags a JSON block wrapped in markdown code fences", () => {
+    const fenced = [
+      "```json",
+      '[{"version":"v0.9","updateComponents":{"surfaceId":"s","components":[]}}]',
+      "```",
+    ].join("\n");
+    expect(looksLikeRawA2UI(fenced)).toBe(true);
+  });
+
+  it("does NOT flag normal conversational text", () => {
+    expect(looksLikeRawA2UI("Sure, here's the summary you asked for.")).toBe(false);
+    expect(looksLikeRawA2UI("I'll create a surface with buttons.")).toBe(false);
+    expect(looksLikeRawA2UI("")).toBe(false);
+  });
+
+  it("does NOT flag text that merely mentions the words", () => {
+    expect(
+      looksLikeRawA2UI(
+        "To create a surface, I'd use the send_a2ui_json_to_client tool.",
+      ),
+    ).toBe(false);
   });
 });
