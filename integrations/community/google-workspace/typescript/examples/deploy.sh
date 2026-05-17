@@ -18,66 +18,23 @@ BASE_URL="${1:?Usage: ./deploy.sh <BASE_URL>}"
 # Strip trailing slash
 BASE_URL="${BASE_URL%/}"
 
-echo "==> Generating deployment descriptor with BASE_URL=${BASE_URL}"
+# Source of truth for the deployment descriptor. We template $BASE_URL into
+# the copy at examples/deployment.json — any edits you make there (logoUrl,
+# scopes, triggers) flow through this deploy.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TEMPLATE="${SCRIPT_DIR}/deployment.json"
 
-cat > /tmp/ag-ui-deployment.json <<EOF
-{
-  "oauthScopes": [
-    "https://www.googleapis.com/auth/userinfo.email",
-    "https://www.googleapis.com/auth/userinfo.profile",
-    "https://www.googleapis.com/auth/gmail.addons.execute",
-    "https://www.googleapis.com/auth/gmail.addons.current.message.metadata",
-    "https://www.googleapis.com/auth/gmail.addons.current.message.readonly",
-    "https://www.googleapis.com/auth/gmail.addons.current.action.compose",
-    "https://www.googleapis.com/auth/gmail.compose",
-    "https://www.googleapis.com/auth/gmail.readonly",
-    "https://www.googleapis.com/auth/calendar.addons.execute",
-    "https://www.googleapis.com/auth/calendar.addons.current.event.read",
-    "https://www.googleapis.com/auth/calendar.addons.current.event.write",
-    "https://www.googleapis.com/auth/calendar.events",
-    "https://www.googleapis.com/auth/drive.file"
-  ],
-  "addOns": {
-    "common": {
-      "name": "AG-UI Agent",
-      "logoUrl": "https://www.gstatic.com/images/branding/product/2x/google_cloud_48dp.png",
-      "homepageTrigger": {
-        "runFunction": "${BASE_URL}/homepage"
-      }
-    },
-    "gmail": {
-      "contextualTriggers": [
-        {
-          "unconditional": {},
-          "onTriggerFunction": "${BASE_URL}/gmail/contextual"
-        }
-      ],
-      "composeTrigger": {
-        "selectActions": [
-          {
-            "runFunction": "${BASE_URL}/gmail/compose"
-          }
-        ],
-        "draftAccess": "METADATA"
-      }
-    },
-    "calendar": {
-      "currentEventAccess": "READ_WRITE",
-      "eventOpenTrigger": {
-        "runFunction": "${BASE_URL}/calendar/contextual"
-      }
-    },
-    "docs": {
-      "homepageTrigger": {
-        "runFunction": "${BASE_URL}/homepage"
-      },
-      "onFileScopeGrantedTrigger": {
-        "runFunction": "${BASE_URL}/docs/file-scope-granted"
-      }
-    }
-  }
-}
-EOF
+if [ ! -f "${TEMPLATE}" ]; then
+  echo "ERROR: template not found at ${TEMPLATE}" >&2
+  exit 1
+fi
+
+echo "==> Rendering deployment descriptor from ${TEMPLATE} with BASE_URL=${BASE_URL}"
+
+# Substitute \$BASE_URL (and ${BASE_URL}) — the descriptor uses \$BASE_URL
+# as a placeholder per Google's add-on conventions.
+sed -e "s|\$BASE_URL|${BASE_URL}|g" -e "s|\${BASE_URL}|${BASE_URL}|g" \
+  "${TEMPLATE}" > /tmp/ag-ui-deployment.json
 
 echo "==> Deployment descriptor written to /tmp/ag-ui-deployment.json"
 cat /tmp/ag-ui-deployment.json
@@ -88,14 +45,29 @@ gcloud workspace-add-ons get-authorization 2>/dev/null || true
 
 echo ""
 echo "==> Creating/replacing deployment 'ag-ui-agent'..."
+# Prefer `replace` when the deployment already exists. If `describe`
+# returns non-zero (not found, auth glitch, etc.), fall back to `create`;
+# if that hits a conflict because the deployment does exist after all,
+# retry with `replace`.
 if gcloud workspace-add-ons deployments describe ag-ui-agent &>/dev/null; then
   gcloud workspace-add-ons deployments replace ag-ui-agent \
     --deployment-file=/tmp/ag-ui-deployment.json
   echo "==> Deployment updated."
 else
-  gcloud workspace-add-ons deployments create ag-ui-agent \
-    --deployment-file=/tmp/ag-ui-deployment.json
-  echo "==> Deployment created."
+  if ! gcloud workspace-add-ons deployments create ag-ui-agent \
+      --deployment-file=/tmp/ag-ui-deployment.json 2>/tmp/ag-ui-create.err; then
+    if grep -q "already exists" /tmp/ag-ui-create.err; then
+      echo "    create hit 'already exists' — retrying as replace..."
+      gcloud workspace-add-ons deployments replace ag-ui-agent \
+        --deployment-file=/tmp/ag-ui-deployment.json
+      echo "==> Deployment updated."
+    else
+      cat /tmp/ag-ui-create.err >&2
+      exit 1
+    fi
+  else
+    echo "==> Deployment created."
+  fi
 fi
 
 echo ""
