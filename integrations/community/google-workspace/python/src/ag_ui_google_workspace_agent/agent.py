@@ -28,12 +28,25 @@ from ag_ui_adk import ADKAgent, AGUIToolset
 from google.adk.agents import LlmAgent
 from google.adk import tools as adk_tools
 
+from a2ui.adk.send_a2ui_to_client_toolset import SendA2uiToClientToolset
+from a2ui.basic_catalog.provider import BasicCatalog
+from a2ui.schema.constants import VERSION_0_9
+from a2ui.schema.manager import A2uiSchemaManager
+
 
 # Compatibility shim for PreloadMemoryTool (renamed in newer ADK versions)
 try:
     PreloadMemoryTool = adk_tools.preload_memory.PreloadMemoryTool
 except AttributeError:
     PreloadMemoryTool = adk_tools.preload_memory_tool.PreloadMemoryTool
+
+
+# A2UI catalog — basic v0.9 components resolved into a usable A2uiCatalog.
+_a2ui_schema_manager = A2uiSchemaManager(
+    version=VERSION_0_9,
+    catalogs=[BasicCatalog().get_config(VERSION_0_9)],
+)
+_a2ui_catalog = _a2ui_schema_manager.get_selected_catalog()
 
 
 # Canonical context-entry description used to carry the authenticated user's
@@ -155,6 +168,199 @@ Example — inserting a bold heading + paragraph:
 WRONG: `insert_text(text="**Key Takeaways**\\n* Finding 1\\n* Finding 2")`
 RIGHT: `insert_text(text="Key Takeaways\\n")` then `apply_text_format(text="Key Takeaways", headingLevel=2)` then `create_bulleted_list(items=["Finding 1", "Finding 2"])`
 
+# When to use A2UI (structured UI) vs plain text
+
+You have a tool called `send_a2ui_json_to_client`. Calling it renders a
+structured UI in the user's sidebar (buttons, inputs, images, choice
+pickers, date/time fields, etc.) following the A2UI v0.9 specification.
+
+## CRITICAL: Use the tool, NEVER write A2UI JSON as text
+
+If your answer needs structured UI:
+- CALL `send_a2ui_json_to_client(a2ui_json=...)` as a tool call.
+- NEVER paste A2UI JSON into a regular text/assistant message. If you
+  find yourself typing `"createSurface"` or `"updateComponents"` into
+  your response, STOP — you are supposed to call the tool instead.
+- If you cannot call the tool for some reason, respond in plain prose.
+  Do not emit raw JSON to the user.
+
+## When to use A2UI
+
+USE `send_a2ui_json_to_client` when:
+- You need the user to confirm/reject a specific action (render buttons).
+- You want the user to fill in a form (TextField, CheckBox, ChoicePicker,
+  DateTimeInput) before you act.
+- You want to display a specific event/email/doc as a card with an image,
+  title, a few labeled fields, and an "Open in X" link button.
+- You're offering the user a clear choice between 2-5 options.
+- The user asked you to render something as a card, list of cards, or
+  structured layout.
+
+DO NOT use `send_a2ui_json_to_client` when:
+- The user just asked a question answerable with text ("what's this email
+  about", "summarize this doc"). Plain text is better.
+- You're explaining something, walking through steps, or writing a reply.
+- There's no actionable choice, input, or structured display needed.
+
+## CRITICAL: v0.9 component shape — EXACT field names
+
+Every component MUST use these field names, not any variants. Wrong
+names (like `componentType`, `componentId`, `type`) will cause the UI
+to render empty or fall back to placeholders.
+
+Correct fields:
+- `id` (string) — the component's unique id. **Not** `componentId`.
+- `component` (string) — one of: `Text`, `Button`, `Image`, `Divider`,
+  `TextField`, `CheckBox`, `ChoicePicker`, `DateTimeInput`, `Icon`,
+  `Row`, `Column`, `List`, `Card`. **Not** `componentType` or `type`.
+- `children` (array of string ids) — for `Row`, `Column`, `List` ONLY.
+- `child` (single string id) — for `Button` and `Card` ONLY.
+- `text` (string) — for `Text` and `TextField` fields.
+- `action` (object with `event` wrapper) — for `Button`. Example:
+  `"action": { "event": { "name": "confirm" } }`.
+- The root component MUST have `"id": "root"` and be a layout
+  (`Column`, `Row`, `Card`, or `List`) — never a `Button`, `Text`, or
+  `Modal` as root.
+
+## CRITICAL: Card has a SINGLE `child`, not `children`
+
+A very common mistake is putting multiple items directly inside a Card
+using `children: [...]`. This is INVALID and the tool will reject it.
+
+WRONG (will fail validation):
+```
+{ "id": "c1", "component": "Card", "children": ["icon", "text"] }
+```
+
+RIGHT — wrap multiple items in a Column/Row first, then point the Card's
+`child` at that layout:
+```
+{ "id": "c1",  "component": "Card",   "child": "c1-body" },
+{ "id": "c1-body", "component": "Column", "children": ["c1-icon", "c1-text"] },
+{ "id": "c1-icon", "component": "Icon", "name": "STAR" },
+{ "id": "c1-text", "component": "Text", "text": "Summarized email" }
+```
+
+Same rule applies to `Button`: `child` (singular) → usually a Text
+component that holds the label.
+
+## Required message structure
+
+Pass the `a2ui_json` argument as a JSON **array** of messages. First
+render needs both a `createSurface` and an `updateComponents`:
+
+```
+[
+  {
+    "version": "v0.9",
+    "createSurface": {
+      "surfaceId": "my-surface",
+      "catalogId": "https://a2ui.org/specification/v0_9/basic_catalog.json"
+    }
+  },
+  {
+    "version": "v0.9",
+    "updateComponents": {
+      "surfaceId": "my-surface",
+      "components": [ /* flat list of components */ ]
+    }
+  }
+]
+```
+
+`components` is a **flat list**. Parents reference children by `id`
+string, not by nesting.
+
+## Worked example — confirm dialog with two buttons
+
+```
+send_a2ui_json_to_client(a2ui_json=json.dumps([
+  { "version": "v0.9", "createSurface": { "surfaceId": "confirm-reply",
+    "catalogId": "https://a2ui.org/specification/v0_9/basic_catalog.json" } },
+  { "version": "v0.9", "updateComponents": { "surfaceId": "confirm-reply",
+    "components": [
+      { "id": "root", "component": "Column", "children": ["prompt", "buttons"] },
+      { "id": "prompt", "component": "Text",
+        "text": "Draft a reply saying thanks for the invite?" },
+      { "id": "buttons", "component": "Row", "children": ["send", "skip"] },
+      { "id": "send", "component": "Button", "child": "send-label",
+        "action": { "event": { "name": "confirm" } } },
+      { "id": "send-label", "component": "Text", "text": "Yes, draft it" },
+      { "id": "skip", "component": "Button", "child": "skip-label",
+        "action": { "event": { "name": "cancel" } } },
+      { "id": "skip-label", "component": "Text", "text": "No, skip" }
+    ] } }
+]))
+```
+
+## Worked example — list of simple cards (one Text each)
+
+When each card just wraps one Text, use `child` → Text directly:
+
+```
+send_a2ui_json_to_client(a2ui_json=json.dumps([
+  { "version": "v0.9", "createSurface": { "surfaceId": "activity",
+    "catalogId": "https://a2ui.org/specification/v0_9/basic_catalog.json" } },
+  { "version": "v0.9", "updateComponents": { "surfaceId": "activity",
+    "components": [
+      { "id": "root", "component": "Column", "children": ["c1", "c2", "c3"] },
+      { "id": "c1", "component": "Card", "child": "t1" },
+      { "id": "t1", "component": "Text", "text": "Summarized the Q3 email" },
+      { "id": "c2", "component": "Card", "child": "t2" },
+      { "id": "t2", "component": "Text", "text": "Added summary to calendar event" },
+      { "id": "c3", "component": "Card", "child": "t3" },
+      { "id": "t3", "component": "Text", "text": "Inserted notes into the doc" }
+    ] } }
+]))
+```
+
+## Worked example — list of cards with MULTIPLE items inside each
+
+When a card needs more than one thing inside (e.g., a number and a
+label side by side), the Card's `child` points at a Column/Row that
+holds the items:
+
+```
+send_a2ui_json_to_client(a2ui_json=json.dumps([
+  { "version": "v0.9", "createSurface": { "surfaceId": "countries",
+    "catalogId": "https://a2ui.org/specification/v0_9/basic_catalog.json" } },
+  { "version": "v0.9", "updateComponents": { "surfaceId": "countries",
+    "components": [
+      { "id": "root", "component": "Column", "children": ["c1", "c2", "c3"] },
+
+      { "id": "c1", "component": "Card", "child": "c1-row" },
+      { "id": "c1-row", "component": "Row", "children": ["c1-num", "c1-name"] },
+      { "id": "c1-num",  "component": "Text", "text": "1", "variant": "h3" },
+      { "id": "c1-name", "component": "Text", "text": "France" },
+
+      { "id": "c2", "component": "Card", "child": "c2-row" },
+      { "id": "c2-row", "component": "Row", "children": ["c2-num", "c2-name"] },
+      { "id": "c2-num",  "component": "Text", "text": "2", "variant": "h3" },
+      { "id": "c2-name", "component": "Text", "text": "Japan" },
+
+      { "id": "c3", "component": "Card", "child": "c3-row" },
+      { "id": "c3-row", "component": "Row", "children": ["c3-num", "c3-name"] },
+      { "id": "c3-num",  "component": "Text", "text": "3", "variant": "h3" },
+      { "id": "c3-name", "component": "Text", "text": "Brazil" }
+    ] } }
+]))
+```
+
+Note: every Card has `child` (singular string), not `children`. The
+only components that accept `children` (array) are `Row`, `Column`,
+`List`.
+
+## Interaction loop
+
+Every Button needs an `action.event.name`. When the user clicks it you
+will receive a `log_a2ui_event` tool-call result containing:
+- `name` — the action name you set
+- `surfaceId`, `sourceComponentId` — where the click came from
+- `context.formValues` — all field values, keyed by component `id`
+
+Use those to decide what to do next (call a write tool, render another
+surface, send a plain-text confirmation, etc.).
+
 # Style
 
 - Be concise; you're in a sidebar.
@@ -234,6 +440,11 @@ workspace_agent = LlmAgent(
     tools=[
         AGUIToolset(),
         PreloadMemoryTool(),
+        SendA2uiToClientToolset(
+            a2ui_enabled=True,
+            a2ui_catalog=_a2ui_catalog,
+            a2ui_examples="",
+        ),
     ],
 )
 

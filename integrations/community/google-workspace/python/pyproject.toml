@@ -13,6 +13,7 @@ dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.30.0",
     "python-dotenv>=1.0.0",
+    "a2ui-agent-sdk>=0.2.2",
 ]
 
 [dependency-groups]
@@ -23,6 +24,7 @@ dev = [
 
 [tool.uv.sources]
 ag-ui-adk = { path = "../../../adk-middleware/python", editable = true }
+a2ui-agent-sdk = { git = "https://github.com/google/A2UI.git", subdirectory = "agent_sdks/python", rev = "609ab52c0511e29d01c5395b024c8170cb507917" }
 
 [build-system]
 requires = ["hatchling"]
