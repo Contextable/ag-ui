@@ -457,14 +457,22 @@ export async function runAgent(opts: RunAgentOptions): Promise<AgentRunResult> {
   // call; JSON failed Python-side schema validation; SDK returned an
   // error string instead of validated_a2ui_json. Truncated to keep log
   // lines manageable; bump LOG_A2UI_FULL=1 for unbounded payloads.
+  //
+  // Default cap is 8000 chars per payload — A2UI surfaces are inherently
+  // verbose (lots of nested components) and the Python SDK's JSON error
+  // messages reference char positions deep in the payload (e.g. "char
+  // 3550"), so truncating tighter than that hides the relevant section.
   if (lastA2UIToolCallArgs && a2uiOperations.length === 0) {
     const fullDump = process.env.LOG_A2UI_FULL === "1";
-    const cap = fullDump ? Infinity : 2000;
+    const cap = fullDump ? Infinity : 8000;
     const trim = (s: string) =>
       s.length > cap ? `${s.slice(0, cap)}…[+${s.length - cap} chars]` : s;
+    const argsLen = lastA2UIToolCallArgs.length;
+    const resultLen = (lastA2UIToolResultContent ?? "").length;
     console.warn(
       `[agent-runner] A2UI extraction yielded 0 ops despite tool call. ` +
-        `Dumping payloads for diagnosis (set LOG_A2UI_FULL=1 for full text):`,
+        `Tool-call args: ${argsLen} chars; tool result: ${resultLen} chars. ` +
+        `Dumping payloads (set LOG_A2UI_FULL=1 if either exceeds the ${cap}-char cap):`,
     );
     console.warn(
       `[agent-runner]   A2UI tool-call args (what the model emitted): ${trim(lastA2UIToolCallArgs)}`,
