@@ -1,18 +1,18 @@
-# Keep the Docker context small. Build context = repo root, so paths are
-# repo-root-relative.
-**/node_modules
-**/dist
-**/.next
-**/.turbo
-**/.nx
-**/coverage
-**/.cache
-**/.venv
-**/__pycache__
-**/.pytest_cache
-**/.git
-**/.github
-**/.vscode
-**/.idea
-**/.DS_Store
-**/*.log
+# Keep the Docker context small. Build context = this typescript/ subfolder.
+node_modules
+dist
+coverage
+.cache
+.venv
+.pytest_cache
+.turbo
+.nx
+.git
+.github
+.vscode
+.idea
+.DS_Store
+*.log
+# Tests aren't needed in the production image
+tests
+vitest.config.ts

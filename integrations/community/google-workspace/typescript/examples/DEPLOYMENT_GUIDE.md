@@ -158,9 +158,9 @@ The repo ships Dockerfiles + `railway.toml` files for both halves of this integr
 In Railway:
 
 1. Create a new project from this repo, branch `feat/google-workspace-integration`.
-2. Add **two services** pointing at the same repo:
-   - **`gws-addon`**: leave Root Directory blank; set Dockerfile Path to `integrations/community/google-workspace/typescript/Dockerfile`. Railway auto-mints a public `*.up.railway.app` URL.
-   - **`gws-agent`**: leave Root Directory blank; set Dockerfile Path to `integrations/community/google-workspace/python/Dockerfile`. **Do not enable public networking** — only `gws-addon` should reach it.
+2. Add **two services** pointing at the same repo. The two services have different build needs:
+   - **`gws-addon` (TypeScript)** — **self-contained.** Set Root Directory to `integrations/community/google-workspace/typescript`. The Dockerfile installs `@ag-ui/*` from npm, builds in-container, and ships a lean runtime. No monorepo context required. Railway auto-mints a public `*.up.railway.app` URL.
+   - **`gws-agent` (Python)** — **needs monorepo context** because `pyproject.toml` pins `ag-ui-adk` as an editable local dep at `../../../adk-middleware/python` (where the cross-surface-memory feature lives until it's published to PyPI). Leave Root Directory blank (so build context = repo root) and set Build → Builder = "Dockerfile" + Dockerfile Path = `integrations/community/google-workspace/python/Dockerfile`. **Do not enable public networking** — only `gws-addon` should reach it.
 3. Set environment variables (Railway UI → Variables):
 
    **gws-agent:**
