@@ -45,62 +45,34 @@ export async function executeChatTool(
 
 async function executeReplyInThread(
   args: { text: string },
-  event: WorkspaceEvent,
+  _event: WorkspaceEvent,
 ): Promise<ToolResult> {
-  const oauthToken = event.authorizationEventObject?.userOAuthToken;
-  if (!oauthToken) {
-    return { result: JSON.stringify({ error: "No OAuth token available" }) };
-  }
-
-  const spaceName = event.chat?.space?.name;
-  const threadName = event.chat?.messagePayload?.message?.thread?.name;
-
-  if (!spaceName) {
-    return { result: JSON.stringify({ error: "No chat space context" }) };
-  }
-
-  try {
-    const body: Record<string, any> = {
-      text: args.text,
-    };
-
-    if (threadName) {
-      body.thread = { name: threadName };
-    }
-
-    const response = await fetch(
-      `https://chat.googleapis.com/v1/${spaceName}/messages`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${oauthToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(5000),
-      },
-    );
-
-    if (!response.ok) {
-      return {
-        result: JSON.stringify({
-          error: `Chat API error: ${response.status}`,
-        }),
-      };
-    }
-
-    const data: any = await response.json();
-    return {
-      result: JSON.stringify({
-        success: true,
-        messageName: data.name,
-      }),
-    };
-  } catch (err) {
-    return {
-      result: JSON.stringify({
-        error: `Failed to post message: ${(err as Error).message}`,
-      }),
-    };
-  }
+  // Inline-fulfill: do not call the Chat REST API. Two reasons:
+  //
+  // 1. Workspace Add-on Chat events deliver replies via the **synchronous**
+  //    `/chat/event` response (`hostAppDataAction.chatDataAction.createMessageAction`).
+  //    Google posts the message for us based on what we return. A separate
+  //    REST POST would either duplicate the message or 401/403 because
+  //    add-on Chat events do not populate `authorizationEventObject.userOAuthToken`
+  //    — Google doesn't grant a posting-capable token because it doesn't
+  //    need to.
+  // 2. Tool-rigorous models (e.g. gemini-2.5-pro) will always reach for a
+  //    tool named "reply in thread" when asked to reply in a Chat thread.
+  //    If the tool fails, the agent loops, sees the error, and produces
+  //    an apology like "I'm having technical difficulties" instead of the
+  //    intended reply. Tool-shy models (e.g. gemini-3.5-flash) tend to
+  //    skip the tool and emit plain text, which made the same broken
+  //    OAuth path look fine in practice.
+  //
+  // So we accept the tool call, echo the text in the result, and rely on
+  // the chat route to lift `args.text` into the synchronous response
+  // (see extractReplyInThreadText in apps/chat/routes.ts).
+  //
+  // Asynchronous follow-up messages (progress updates after the initial
+  // reply has already been posted) would need a real REST path with a
+  // service-account token or a separate OAuth scope grant. That's a
+  // future feature — out of scope here.
+  return {
+    result: JSON.stringify({ success: true, text: args.text }),
+  };
 }

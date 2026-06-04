@@ -5,6 +5,7 @@ import { getChatTools, executeChatTool } from "../../src/apps/chat/tools";
 import {
   chatCardResponse,
   chatResponse,
+  extractReplyInThreadText,
   looksLikeRawA2UI,
 } from "../../src/apps/chat/routes";
 import type { Card } from "../../src/cards/widgets";
@@ -102,7 +103,12 @@ describe("Chat Module", () => {
   });
 
   describe("Tool Execution", () => {
-    it("reply_in_thread returns error when no OAuth token", async () => {
+    // reply_in_thread is inline-fulfilled: no REST call, no OAuth check.
+    // Add-on Chat events deliver the reply via the synchronous /chat/event
+    // response, not via a separate REST POST. The route hoists `args.text`
+    // into the response body — covered by the extractReplyInThreadText
+    // tests below.
+    it("reply_in_thread returns success with the echoed text (no OAuth needed)", async () => {
       const result = await executeChatTool(
         {
           id: "tc-1",
@@ -115,31 +121,28 @@ describe("Chat Module", () => {
         baseEvent,
       );
       const parsed = JSON.parse(result!.result);
-      expect(parsed.error).toContain("OAuth token");
+      expect(parsed.success).toBe(true);
+      expect(parsed.text).toBe("Hello!");
+      expect(parsed.error).toBeUndefined();
     });
 
-    it("reply_in_thread returns error when no space context", async () => {
-      const event: WorkspaceEvent = {
-        ...baseEvent,
-        authorizationEventObject: {
-          userOAuthToken: "token",
-          userIdToken: "id",
-          systemIdToken: "sys",
-        },
-      };
+    it("reply_in_thread succeeds even without space context", async () => {
+      // Previously this returned a `space context` error. We now ignore
+      // event context entirely because the synchronous response posts
+      // to whatever thread the original event referenced.
       const result = await executeChatTool(
         {
           id: "tc-1",
           type: "function",
           function: {
             name: "reply_in_thread",
-            arguments: JSON.stringify({ text: "Hello!" }),
+            arguments: JSON.stringify({ text: "Hi" }),
           },
         },
-        event,
+        baseEvent,
       );
       const parsed = JSON.parse(result!.result);
-      expect(parsed.error).toContain("space context");
+      expect(parsed.success).toBe(true);
     });
   });
 });
@@ -243,5 +246,99 @@ describe("looksLikeRawA2UI", () => {
         "To create a surface, I'd use the send_a2ui_json_to_client tool.",
       ),
     ).toBe(false);
+  });
+});
+
+describe("extractReplyInThreadText", () => {
+  const assistantWithToolCall = (text: string): any => ({
+    id: "m1",
+    role: "assistant",
+    toolCalls: [
+      {
+        id: "tc1",
+        type: "function",
+        function: {
+          name: "reply_in_thread",
+          arguments: JSON.stringify({ text }),
+        },
+      },
+    ],
+  });
+
+  it("returns the text from a single reply_in_thread call", () => {
+    expect(
+      extractReplyInThreadText([assistantWithToolCall("Hi back!")]),
+    ).toBe("Hi back!");
+  });
+
+  it("returns the LATEST reply_in_thread text when multiple calls happened", () => {
+    expect(
+      extractReplyInThreadText([
+        assistantWithToolCall("first attempt"),
+        assistantWithToolCall("revised reply"),
+      ]),
+    ).toBe("revised reply");
+  });
+
+  it("returns undefined when no reply_in_thread call exists", () => {
+    expect(
+      extractReplyInThreadText([
+        { id: "u1", role: "user", content: "hi" } as any,
+        { id: "a1", role: "assistant", content: "hi back" } as any,
+      ]),
+    ).toBeUndefined();
+  });
+
+  it("ignores other tool calls in the search", () => {
+    expect(
+      extractReplyInThreadText([
+        {
+          id: "a1",
+          role: "assistant",
+          toolCalls: [
+            {
+              id: "tc-other",
+              type: "function",
+              function: {
+                name: "some_other_tool",
+                arguments: JSON.stringify({ text: "not me" }),
+              },
+            },
+          ],
+        } as any,
+        assistantWithToolCall("the real reply"),
+      ]),
+    ).toBe("the real reply");
+  });
+
+  it("skips empty-text reply_in_thread calls and keeps searching", () => {
+    expect(
+      extractReplyInThreadText([
+        assistantWithToolCall("an earlier good reply"),
+        assistantWithToolCall("   "),
+      ]),
+    ).toBe("an earlier good reply");
+  });
+
+  it("tolerates malformed JSON args without throwing", () => {
+    expect(
+      extractReplyInThreadText([
+        {
+          id: "a1",
+          role: "assistant",
+          toolCalls: [
+            {
+              id: "tc1",
+              type: "function",
+              function: {
+                name: "reply_in_thread",
+                arguments: "{this is not valid json",
+              },
+            },
+          ],
+        } as any,
+        assistantWithToolCall("the fallback reply"),
+      ]),
+    ).toBe("the fallback reply");
   });
 });

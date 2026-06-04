@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { randomUUID } from "crypto";
+import type { Message } from "@ag-ui/core";
 import type { SessionStore } from "../../core/session";
 import type { AppRegistry } from "../../apps/registry";
 import { validateGoogleAuth, AuthError } from "../../core/auth";
@@ -8,6 +9,41 @@ import { markdownToChat } from "../../core/markdown-to-chat";
 import { renderA2UISurfaces } from "../../core/a2ui-renderer";
 import type { Card } from "../../cards/widgets";
 import type { WorkspaceEvent } from "../../types";
+
+/**
+ * Pulls the `text` arg out of the most recent `reply_in_thread` tool call,
+ * if the agent made one. Tool-rigorous models (e.g. gemini-2.5-pro) use
+ * `reply_in_thread` as their channel for the user-visible reply; the tool
+ * is fulfilled inline (see apps/chat/tools.ts) and the chat route uses
+ * `args.text` as the synchronous response. Falls back to the agent's
+ * plain text content (`result.responseText`) when no such tool call exists.
+ *
+ * Exported for testing.
+ */
+export function extractReplyInThreadText(
+  messages: Message[],
+): string | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg: any = messages[i];
+    if (msg.role !== "assistant") continue;
+    const toolCalls = msg.toolCalls;
+    if (!Array.isArray(toolCalls) || toolCalls.length === 0) continue;
+    for (const tc of toolCalls) {
+      if (tc?.function?.name !== "reply_in_thread") continue;
+      const rawArgs = tc.function?.arguments;
+      if (typeof rawArgs !== "string") continue;
+      try {
+        const parsed = JSON.parse(rawArgs);
+        if (typeof parsed?.text === "string" && parsed.text.trim()) {
+          return parsed.text;
+        }
+      } catch {
+        // Malformed args; fall through and keep searching earlier messages.
+      }
+    }
+  }
+  return undefined;
+}
 
 /**
  * Builds the correct Chat response based on whether this is a
@@ -336,13 +372,20 @@ export function createChatRoutes(
         );
       }
 
-      // Plain text path. If the agent produced no text either — treat as
-      // a silent completion (likely a tool-only turn). Use a short ack
-      // instead of the misleading "no text response" placeholder.
+      // Plain text path. Prefer the args of a `reply_in_thread` tool call
+      // when present — that's the model's intended reply. (Tool-rigorous
+      // models like gemini-2.5-pro use the tool as their channel; tool-shy
+      // models like gemini-3.5-flash just emit plain text, which lands in
+      // result.responseText.) If neither is present, treat as a silent
+      // completion and use a short ack instead of the misleading "no
+      // text response" placeholder.
+      const replyFromTool = extractReplyInThreadText(result.messages);
       const fallbackText = result.executedToolCalls.length > 0
         ? "Done."
         : "Let me know what you'd like me to do.";
-      const responseText = markdownToChat(result.responseText || fallbackText);
+      const responseText = markdownToChat(
+        replyFromTool || result.responseText || fallbackText,
+      );
       console.log(
         `[chat/event] response (${elapsed}ms): "${responseText.slice(0, 80)}..."`,
       );

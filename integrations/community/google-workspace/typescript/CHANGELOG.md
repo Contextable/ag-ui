@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Chat `reply_in_thread` no longer requires OAuth.** The Workspace Add-on Chat event payload does not populate `authorizationEventObject.userOAuthToken` (Google posts the reply itself based on our synchronous `chatDataAction.createMessageAction.message` response, so no posting-capable token is granted). The previous tool implementation tried to call the Chat REST API directly, returning `"No OAuth token available"` on every invocation. Tool-shy models like `gemini-3.5-flash` skipped the tool and emitted plain text — hiding the broken path. Tool-rigorous models like `gemini-2.5-pro` always call the tool when one is named `reply_in_thread`, surfaced the failure, and the agent looped into an apology like "I'm having technical difficulties." The tool is now **inline-fulfilled**: it returns `{success: true, text: args.text}` without calling the REST API; the chat route's new `extractReplyInThreadText` helper hoists `args.text` into the synchronous response body. The agent's tool contract is unchanged. (Async follow-up messages — actual REST posts after the initial reply — would still need a proper OAuth scope grant and a separate consent flow; that's a future feature.)
+
 ### Changed
 
 - **A2UI failure diagnostics.** When the agent emits a `send_a2ui_json_to_client` tool call but the validated operation list ends up empty — the most common silent-failure mode — `agent-runner.ts` now logs both halves of the failure: the raw `a2ui_json` arg the model produced (what the LLM emitted) and the raw tool result content returned by the Python A2UI SDK (what got accepted). Truncated to 2000 chars in each direction; bypassed with `LOG_A2UI_FULL=1`. The chat route similarly dumps the ops payload when ops were received but rendering produced zero surfaces. `a2ui-renderer.ts` now `console.error`s render failures with the component id + type + stack instead of only inlining `[render error: ...]` into the card. These are pure logging additions — no behavior change.
