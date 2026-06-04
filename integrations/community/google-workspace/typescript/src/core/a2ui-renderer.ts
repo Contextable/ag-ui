@@ -215,10 +215,21 @@ function getComponent(state: SurfaceState, id: string): A2UIComponent | undefine
 
 function renderTree(ctx: Ctx, id: string): Widget[] {
   const c = getComponent(ctx.state, id);
-  if (!c) return [textParagraph(`[missing component: ${id}]`)];
+  if (!c) {
+    console.warn(`[a2ui-renderer] missing component id=${id} on surface ${ctx.state.surfaceId}`);
+    return [textParagraph(`[missing component: ${id}]`)];
+  }
   try {
     return renderComponent(ctx, c);
   } catch (err) {
+    // Surface the failure to the logs in addition to the inline card text,
+    // so operators can correlate user-visible "[render error]" widgets
+    // with what actually threw. Include the component type + id for
+    // quick triage.
+    console.error(
+      `[a2ui-renderer] render failed for component id=${id} type=${c.component} on surface ${ctx.state.surfaceId}:`,
+      (err as Error).stack ?? (err as Error).message,
+    );
     return [textParagraph(`[render error: ${(err as Error).message}]`)];
   }
 }

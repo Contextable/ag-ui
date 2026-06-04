@@ -317,8 +317,15 @@ export function createChatRoutes(
         // Ops were received but rendering produced nothing — usually a
         // malformed surface (missing root, unknown components). Tell the
         // user something useful rather than the generic "no response".
+        // Dump the ops payload so the operator can see what came in;
+        // truncated to avoid swamping logs, bypassed with LOG_A2UI_FULL=1.
+        const fullDump = process.env.LOG_A2UI_FULL === "1";
+        const opsJson = JSON.stringify(result.a2uiOperations);
+        const dump = fullDump || opsJson.length <= 2000
+          ? opsJson
+          : `${opsJson.slice(0, 2000)}…[+${opsJson.length - 2000} chars]`;
         console.warn(
-          `[chat/event] A2UI ops received (${result.a2uiOperations.length}) but no surfaces rendered`,
+          `[chat/event] A2UI ops received (${result.a2uiOperations.length}) but no surfaces rendered. ops=${dump}`,
         );
         return c.json(
           chatResponse(

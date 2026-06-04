@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Model is now configurable via `WORKSPACE_MODEL` env var** and the default switched from `gemini-3.5-flash` to **`gemini-2.5-pro`**. Picking a model for this agent is a JSON-precision problem, not a chat quality one — the agent has to emit strict A2UI v0.9 JSON in tool-call arguments. 3.5-flash was observed to malform A2UI JSON in practice; 2.5-pro is the GA workhorse for structured output and is the recommended default until 3.5-pro lands beyond limited Vertex preview. Set `WORKSPACE_MODEL=gemini-3.5-flash` (or any model your AI Studio key has access to) to override. The historical Flash bug notes live in [agent.py](integrations/community/google-workspace/python/src/ag_ui_google_workspace_agent/agent.py) as a comment block above `DEFAULT_WORKSPACE_MODEL`.
+
 - **Model upgraded from `gemini-2.0-flash` to `gemini-3.5-flash`** (released 2026-05-19 at Google I/O 2026). Same Generative Language API, no Cloud Console changes required for callers using `GOOGLE_API_KEY`. Skipped 2.5-flash because of a known SSE streaming aggregator bug that silently dropped tool calls ([google/adk-python #3974](https://github.com/google/adk-python/issues/3974), [#3754](https://github.com/google/adk-python/issues/3754)) — the bug was 2.5-flash-specific in manifestation but the aggregator code path is shared; the comment in `agent.py` flags this for verification with 3.5.
 
 ### Added

@@ -220,6 +220,15 @@ export async function runAgent(opts: RunAgentOptions): Promise<AgentRunResult> {
   // the last set the agent emits wins, so we reset each iteration and
   // collect again via the subscriber below.
   let a2uiOperations: A2UIOperation[] = [];
+
+  // Track the raw a2ui_json arg the agent emitted, plus the raw tool result
+  // string the Python A2UI SDK returned. Logged together if extraction
+  // ultimately produces zero ops, so we can see what the model actually
+  // produced vs. what came back validated. Trimmed in logs to a manageable
+  // size; full payload at debug level only.
+  let lastA2UIToolCallArgs: string | undefined;
+  let lastA2UIToolResultContent: string | undefined;
+
   const a2uiSubscriber = {
     onActivitySnapshotEvent({ event }: { event: { activityType: string; content: Record<string, unknown> } }) {
       if (event.activityType !== A2UIActivityType) return;
@@ -236,6 +245,11 @@ export async function runAgent(opts: RunAgentOptions): Promise<AgentRunResult> {
       const fallback = extractValidatedA2UIFromToolResult(event.content);
       if (fallback.length > 0) {
         a2uiOperations = a2uiOperations.concat(fallback);
+      } else if (event.content) {
+        // Stash for the post-run diagnostic. We don't know yet whether the
+        // agent had earlier success or whether this is the only A2UI
+        // attempt — let the run finish, then decide if we need to dump.
+        lastA2UIToolResultContent = event.content;
       }
     },
   };
@@ -350,6 +364,15 @@ export async function runAgent(opts: RunAgentOptions): Promise<AgentRunResult> {
             name: tc.function?.name,
             args: tc.function?.arguments?.slice(0, 100),
           }));
+          // Snapshot the most recent A2UI tool-call args. We pair this
+          // with the validated tool result later in the diagnostic dump
+          // so a malformed A2UI run shows both "what the model emitted"
+          // and "what the SDK accepted".
+          for (const tc of msg.toolCalls as any[]) {
+            if (tc.function?.name === A2UI_SEND_TOOL_NAME && tc.function?.arguments) {
+              lastA2UIToolCallArgs = tc.function.arguments;
+            }
+          }
         }
         console.log(`[agent-runner]   msg:`, JSON.stringify(summary));
       }
@@ -426,6 +449,32 @@ export async function runAgent(opts: RunAgentOptions): Promise<AgentRunResult> {
 
   // Extract the final text response
   const responseText = extractResponseText(messages);
+
+  // A2UI diagnostic. If the agent emitted a `send_a2ui_json_to_client` tool
+  // call (so we captured its args) AND we ended up with zero validated
+  // operations, dump both sides so the operator can see what went wrong.
+  // Common causes: model produced text-with-JSON instead of a real tool
+  // call; JSON failed Python-side schema validation; SDK returned an
+  // error string instead of validated_a2ui_json. Truncated to keep log
+  // lines manageable; bump LOG_A2UI_FULL=1 for unbounded payloads.
+  if (lastA2UIToolCallArgs && a2uiOperations.length === 0) {
+    const fullDump = process.env.LOG_A2UI_FULL === "1";
+    const cap = fullDump ? Infinity : 2000;
+    const trim = (s: string) =>
+      s.length > cap ? `${s.slice(0, cap)}…[+${s.length - cap} chars]` : s;
+    console.warn(
+      `[agent-runner] A2UI extraction yielded 0 ops despite tool call. ` +
+        `Dumping payloads for diagnosis (set LOG_A2UI_FULL=1 for full text):`,
+    );
+    console.warn(
+      `[agent-runner]   A2UI tool-call args (what the model emitted): ${trim(lastA2UIToolCallArgs)}`,
+    );
+    console.warn(
+      `[agent-runner]   A2UI tool result (what the SDK returned): ${trim(
+        lastA2UIToolResultContent ?? "<none — tool result event never fired>",
+      )}`,
+    );
+  }
 
   return {
     responseText,

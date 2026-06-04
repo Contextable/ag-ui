@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **A2UI failure diagnostics.** When the agent emits a `send_a2ui_json_to_client` tool call but the validated operation list ends up empty — the most common silent-failure mode — `agent-runner.ts` now logs both halves of the failure: the raw `a2ui_json` arg the model produced (what the LLM emitted) and the raw tool result content returned by the Python A2UI SDK (what got accepted). Truncated to 2000 chars in each direction; bypassed with `LOG_A2UI_FULL=1`. The chat route similarly dumps the ops payload when ops were received but rendering produced zero surfaces. `a2ui-renderer.ts` now `console.error`s render failures with the component id + type + stack instead of only inlining `[render error: ...]` into the card. These are pure logging additions — no behavior change.
+
 ### Added
 
 - **Railway deployment scaffolding**: production `Dockerfile` and `railway.toml` at the package root, plus matching files for the Python agent at `../python/`. Two-service Railway topology where the TS add-on is public and the Python ADK agent is reached only via Railway private networking (`http://${{gws-agent.RAILWAY_PRIVATE_DOMAIN}}:${{gws-agent.PORT}}/`). The TS Dockerfile is **subfolder-self-contained**: build context = the typescript subdir, `@ag-ui/*` peer deps are hoisted into `dependencies` and installed from npm, `workspace:*` entries are stripped from `devDependencies` so npm doesn't error on the unsupported protocol. tsdown builds against the npm-installed sources; the runtime image is a lean Node 20-slim with only the pruned production tree. The Python Dockerfile still needs monorepo context (pyproject.toml pins `ag-ui-adk` as an editable local dep at `../../../adk-middleware/python` until the cross-surface-memory feature is published to PyPI). New "Option C — Railway" section in [examples/DEPLOYMENT_GUIDE.md](integrations/community/google-workspace/typescript/examples/DEPLOYMENT_GUIDE.md) walks through the service setup. The existing `examples/Dockerfile` is preserved for users who want a pre-built-`dist/` reference image.

@@ -23,6 +23,8 @@ Cross-surface memory:
 
 from __future__ import annotations
 
+import os
+
 from ag_ui.core import RunAgentInput
 from ag_ui_adk import ADKAgent, AGUIToolset
 from google.adk.agents import LlmAgent
@@ -438,15 +440,29 @@ def extract_user_email(input: RunAgentInput) -> str:
     )
 
 
+# Default model — overridable via the WORKSPACE_MODEL env var so callers can
+# swap between Flash/Pro variants without a code change.
+#
+# Picking a model for this agent is a JSON-precision question, not a chat
+# quality one. The agent has to produce strict A2UI JSON (a2ui v0.9 schema)
+# in tool-call arguments, plus correctly call Workspace tools with fully
+# populated params. Flash variants have been hit-or-miss here:
+#   - 2.0-flash: stable but older; falls down on more complex A2UI surfaces.
+#   - 2.5-flash: SSE streaming aggregator bug silently drops tool calls
+#     (google/adk-python #3974, #3754). Skipped.
+#   - 3.5-flash: faster than 3.5-pro but observed to malform A2UI JSON in
+#     practice. Default here for cost, but prefer pro for A2UI-heavy flows.
+# Pro variants are the better fit when A2UI quality matters:
+#   - 2.5-pro: GA, well-tested for structured output. Recommended swap.
+#   - 3.1-pro / 3.5-pro: newer; 3.5-pro was in limited Vertex preview as of
+#     2026-06; check availability against your API key before flipping.
+DEFAULT_WORKSPACE_MODEL = "gemini-2.5-pro"
+WORKSPACE_MODEL = os.getenv("WORKSPACE_MODEL", DEFAULT_WORKSPACE_MODEL)
+
+
 workspace_agent = LlmAgent(
     name="workspace_assistant",
-    # Upgraded from gemini-2.0-flash to gemini-3.5-flash (released 2026-05-19,
-    # Google I/O). Skipped 2.5-flash because of a known SSE streaming aggregator
-    # bug that dropped tool calls (google/adk-python #3974, #3754) — that bug
-    # was 2.5-specific in manifestation but the aggregator code path is shared,
-    # so watch for silent tool-call drop with 3.5 too. Verify end-to-end before
-    # assuming the fix carries over.
-    model="gemini-3.5-flash",
+    model=WORKSPACE_MODEL,
     instruction=WORKSPACE_INSTRUCTION,
     tools=[
         AGUIToolset(),
