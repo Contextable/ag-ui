@@ -149,6 +149,35 @@ gcloud run deploy ag-ui-workspace \
   --set-env-vars="AGUI_DEFAULT_BACKEND_URL=https://your-backend.example.com"
 ```
 
+### Option C — Railway (two services, with private networking)
+
+The repo ships Dockerfiles + `railway.toml` files for both halves of this integration:
+- `integrations/community/google-workspace/typescript/` — public add-on (this is what Google calls)
+- `integrations/community/google-workspace/python/` — private ADK agent backend (reached only by the TS service via Railway's private network)
+
+In Railway:
+
+1. Create a new project from this repo, branch `feat/google-workspace-integration`.
+2. Add **two services** pointing at the same repo:
+   - **`gws-addon`**: leave Root Directory blank; set Dockerfile Path to `integrations/community/google-workspace/typescript/Dockerfile`. Railway auto-mints a public `*.up.railway.app` URL.
+   - **`gws-agent`**: leave Root Directory blank; set Dockerfile Path to `integrations/community/google-workspace/python/Dockerfile`. **Do not enable public networking** — only `gws-addon` should reach it.
+3. Set environment variables (Railway UI → Variables):
+
+   **gws-agent:**
+   - `GOOGLE_API_KEY` (mark as secret)
+
+   **gws-addon:**
+   - `ACTION_BASE_URL` = its own public URL, e.g. `https://gws-addon.up.railway.app`
+   - `AGUI_DEFAULT_BACKEND_URL` = the private URL of `gws-agent`:
+     ```
+     http://${{gws-agent.RAILWAY_PRIVATE_DOMAIN}}:${{gws-agent.PORT}}/
+     ```
+     Railway expands those `${{}}` references at deploy time so the TS add-on hits the agent over the internal network (no public exposure, no egress fees).
+
+4. (Recommended) Configure Watch Paths per service to avoid redeploying both on every commit. See each subproject's `railway.toml` header for the suggested paths.
+
+That public URL becomes your `YOUR-NGROK-OR-CLOUDRUN-URL` everywhere in this guide. **Skip Step 9** — Railway runs the container; there's no local server to start.
+
 ---
 
 ## Step 8: Deploy the Add-on Descriptor
@@ -166,6 +195,8 @@ This script:
 ---
 
 ## Step 9: Start the Server
+
+> Skip if you chose **Option C — Railway**: the container is already running on Railway.
 
 ```bash
 ACTION_BASE_URL=https://YOUR-NGROK-OR-CLOUDRUN-URL \

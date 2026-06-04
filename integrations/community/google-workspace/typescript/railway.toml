@@ -1,0 +1,31 @@
+# Railway service config for the AG-UI Google Workspace Add-on (TS).
+#
+# Set up in Railway:
+#   - Create a service from this monorepo, branch feat/google-workspace-integration
+#   - Service settings:
+#     - Root Directory: leave blank (defaults to repo root so the Dockerfile
+#       can see the pnpm workspace + sibling integrations)
+#     - Watch Paths (recommended, to avoid spurious rebuilds):
+#         integrations/community/google-workspace/typescript/**
+#         sdks/typescript/packages/**
+#         middlewares/a2ui-middleware/**
+#         pnpm-lock.yaml
+#         package.json
+#         pnpm-workspace.yaml
+#   - Required environment variables (set in Railway UI):
+#     - ACTION_BASE_URL: the public URL of THIS service
+#         (e.g. https://gws-addon.up.railway.app)
+#     - AGUI_DEFAULT_BACKEND_URL: the Python agent's internal URL
+#         (e.g. http://${{gws-agent.RAILWAY_PRIVATE_DOMAIN}}:${{gws-agent.PORT}}/)
+#   - Optional:
+#     - GOOGLE_CLOUD_PROJECT / FIRESTORE_PROJECT_ID for Firestore session store
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "integrations/community/google-workspace/typescript/Dockerfile"
+
+[deploy]
+healthcheckPath = "/health"
+healthcheckTimeout = 30
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3

@@ -1,0 +1,27 @@
+# Railway service config for the AG-UI Google Workspace Agent (Python ADK).
+#
+# Set up in Railway:
+#   - Create a service from this monorepo, branch feat/google-workspace-integration
+#   - Service settings:
+#     - Root Directory: leave blank (defaults to repo root so the Dockerfile
+#       can see the editable adk-middleware sibling dep)
+#     - Watch Paths (recommended, to avoid spurious rebuilds):
+#         integrations/community/google-workspace/python/**
+#         integrations/adk-middleware/python/**
+#   - Required environment variables (set in Railway UI):
+#     - GOOGLE_API_KEY: your Gemini API key (mark as a Railway secret)
+#   - Networking:
+#     - DO NOT expose this service publicly. Only the TS add-on should
+#       reach it, via Railway private networking
+#       (http://${{RAILWAY_PRIVATE_DOMAIN}}:${{PORT}}/).
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "integrations/community/google-workspace/python/Dockerfile"
+
+[deploy]
+# No /health endpoint on this server; rely on the FastAPI root binding.
+# Railway will mark the deploy healthy once the container starts and
+# accepts TCP on $PORT.
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3

@@ -1,0 +1,21 @@
+# Keep the Docker context small. Build context = repo root, so paths are
+# repo-root-relative.
+**/node_modules
+**/dist
+**/.next
+**/.turbo
+**/.nx
+**/coverage
+**/.cache
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/.git
+**/.github
+**/.vscode
+**/.idea
+**/.DS_Store
+**/*.log
+**/*.pyc
