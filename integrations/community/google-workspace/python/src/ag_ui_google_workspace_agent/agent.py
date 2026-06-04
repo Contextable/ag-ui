@@ -431,11 +431,13 @@ def extract_user_email(input: RunAgentInput) -> str:
 
 workspace_agent = LlmAgent(
     name="workspace_assistant",
-    # gemini-2.5-flash has a known issue with the ADK middleware's
-    # progressive SSE streaming aggregator that drops tool calls
-    # (see google/adk-python issues #3974, #3754). Stick with
-    # gemini-2.0-flash for reliable tool calling until that's fixed.
-    model="gemini-2.0-flash",
+    # Upgraded from gemini-2.0-flash to gemini-3.5-flash (released 2026-05-19,
+    # Google I/O). Skipped 2.5-flash because of a known SSE streaming aggregator
+    # bug that dropped tool calls (google/adk-python #3974, #3754) — that bug
+    # was 2.5-specific in manifestation but the aggregator code path is shared,
+    # so watch for silent tool-call drop with 3.5 too. Verify end-to-end before
+    # assuming the fix carries over.
+    model="gemini-3.5-flash",
     instruction=WORKSPACE_INSTRUCTION,
     tools=[
         AGUIToolset(),
