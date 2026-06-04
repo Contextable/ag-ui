@@ -50,4 +50,11 @@ RUN uv sync --frozen --no-dev
 EXPOSE 8001
 
 # Shell form so $PORT expands at container start.
-CMD ["sh", "-c", "uv run uvicorn ag_ui_google_workspace_agent.server:app --host 0.0.0.0 --port ${PORT:-8001}"]
+#
+# `--host ::` is intentional. Railway's private networking is IPv6-only:
+# `<service>.railway.internal` resolves to an IPv6 address, so binding to
+# `0.0.0.0` (IPv4 all-interfaces) means the agent listens but is
+# unreachable from sibling services, surfacing as ECONNREFUSED on the
+# caller. Binding to `::` accepts IPv6 *and* IPv4 (dual-stack), so this
+# also works for local Docker runs that hit `localhost`.
+CMD ["sh", "-c", "uv run uvicorn ag_ui_google_workspace_agent.server:app --host :: --port ${PORT:-8001}"]
