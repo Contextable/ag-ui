@@ -21,6 +21,14 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     UV_PYTHON_DOWNLOADS=never
 
+# Git is needed because pyproject.toml pins `a2ui-agent-sdk` to a git ref
+# (github.com/google/A2UI@609ab52). uv shells out to `git clone` for that
+# kind of source; python:3.12-slim doesn't ship git, so without this the
+# build fails with "Git executable not found".
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
+
 # uv is the project's package manager. Installed system-wide so the runtime
 # can `uv run` without bootstrapping.
 RUN pip install --no-cache-dir uv
