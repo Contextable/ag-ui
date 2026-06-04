@@ -119,6 +119,16 @@ class TestWorkspaceAgentConfig:
         assert _a2ui_catalog.version == "0.9"
         assert _a2ui_catalog.name == "basic"
 
+    def test_tavily_search_tool_in_tools(self):
+        from google.adk.tools import FunctionTool
+
+        from ag_ui_google_workspace_agent.web_search import tavily_search
+
+        function_tools = [t for t in workspace_agent.tools if isinstance(t, FunctionTool)]
+        assert any(t.func is tavily_search for t in function_tools), (
+            "tavily_search FunctionTool should be wired into workspace_agent.tools"
+        )
+
 
 class TestWorkspaceInstructionA2uiGuidance:
     """The A2UI section of the instruction is load-bearing for tool use and for

@@ -33,6 +33,8 @@ from a2ui.basic_catalog.provider import BasicCatalog
 from a2ui.schema.constants import VERSION_0_9
 from a2ui.schema.manager import A2uiSchemaManager
 
+from .web_search import tavily_search_tool
+
 
 # Compatibility shim for PreloadMemoryTool (renamed in newer ADK versions)
 try:
@@ -120,6 +122,13 @@ Every request includes contextual info via TWO channels — consult both:
      `replace_text`, `insert_after_text`, `apply_text_format`,
      `create_bulleted_list`
    - CHAT: `reply_in_thread`
+   - ANY HOST: `tavily_search` — live web search for things outside your
+     training data (current events, latest docs, factual lookups with
+     citations). Do NOT use it for the user's private email/calendar/doc
+     content — those have dedicated tools above. Prefer specific queries
+     over generic ones. Returns a dict with `answer`, `results[]`. If the
+     `error` field is present, surface its `details` to the user (Tavily's
+     keyless mode returns rate-limit guidance in plain language).
 
 # Cross-surface memory
 
@@ -447,6 +456,7 @@ workspace_agent = LlmAgent(
             a2ui_catalog=_a2ui_catalog,
             a2ui_examples="",
         ),
+        tavily_search_tool,
     ],
 )
 

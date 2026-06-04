@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Web search via Tavily** (`tavily_search` FunctionTool, [src/ag_ui_google_workspace_agent/web_search.py](integrations/community/google-workspace/python/src/ag_ui_google_workspace_agent/web_search.py)). Default mode is **keyless** — POSTs to `https://api.tavily.com/search` with the `X-Tavily-Access-Mode: keyless` header per [Tavily's keyless docs](https://docs.tavily.com/documentation/keyless), no API key required. If `TAVILY_API_KEY` is set, the key is included in the request body too; Tavily prefers the key over keyless when both are present, so callers can lift rate limits without code changes. Rate-limit responses (4xx with a natural-language JSON body) are surfaced to the agent rather than raised, so the LLM can explain to the user instead of failing silently. Available on every Workspace surface — Gmail/Calendar/Docs/Chat — for any question outside the user's private workspace content. The `WORKSPACE_INSTRUCTION` documents when to prefer it vs. the host-app read tools. Adds `httpx>=0.27.0` as a direct dep (was already transitive). 15 new tests covering header shape, API-key precedence, max_results clamping, error surfacing, and tool wiring.
+
 ### Changed
 
 - **Model upgraded from `gemini-2.0-flash` to `gemini-3.5-flash`** (released 2026-05-19 at Google I/O 2026). Same Generative Language API, no Cloud Console changes required for callers using `GOOGLE_API_KEY`. Skipped 2.5-flash because of a known SSE streaming aggregator bug that silently dropped tool calls ([google/adk-python #3974](https://github.com/google/adk-python/issues/3974), [#3754](https://github.com/google/adk-python/issues/3754)) — the bug was 2.5-flash-specific in manifestation but the aggregator code path is shared; the comment in `agent.py` flags this for verification with 3.5.

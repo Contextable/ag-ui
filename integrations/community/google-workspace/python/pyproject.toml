@@ -14,6 +14,10 @@ dependencies = [
     "uvicorn[standard]>=0.30.0",
     "python-dotenv>=1.0.0",
     "a2ui-agent-sdk>=0.2.2",
+    # Used directly by web_search.py for Tavily HTTP calls. Already pulled
+    # in transitively by ADK/uvicorn but pin explicitly since it's part of
+    # this package's API surface now.
+    "httpx>=0.27.0",
 ]
 
 [dependency-groups]
