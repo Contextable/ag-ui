@@ -44,6 +44,7 @@ from ag_ui.core import (
 from ag_ui_adk import ADKAgent
 from ag_ui_adk.event_translator import EventTranslator
 from ag_ui_adk.session_manager import SessionManager
+from tests.constants import LIVE_TEST_MODEL
 
 
 # =============================================================================
@@ -1026,7 +1027,7 @@ class TestLROSSEIdRemapIntegration:
 
         agent = LlmAgent(
             name="approval_agent",
-            model="gemini-2.0-flash",
+            model=LIVE_TEST_MODEL,
             instruction=(
                 "When asked to do anything, ALWAYS use the get_approval tool first. "
                 "Pass the action description as the 'action' parameter."
@@ -1146,7 +1147,7 @@ class TestLROSSEIdRemapIntegration:
 
         agent = LlmAgent(
             name="approval_agent",
-            model="gemini-2.0-flash",
+            model=LIVE_TEST_MODEL,
             instruction=(
                 "When asked to do anything, ALWAYS use the get_approval tool first. "
                 "Pass the action description as the 'action' parameter."
